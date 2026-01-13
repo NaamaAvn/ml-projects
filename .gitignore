@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.log
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# PyTorch model files
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# TensorFlow model files
+*.h5
+*.pb
+saved_model/
+checkpoint
+
+# Pickle files (can be large)
+*.pkl
+*.pickle
+
+# Large datasets
+data/
+dataset/
+datasets/
+*.csv
+*.json
+*.txt
+*.zip
+*.tar
+*.tar.gz
+
+# Images and videos (exclude training data)
+# Uncomment if you want to exclude all images/videos
+# *.jpg
+# *.jpeg
+# *.png
+# *.gif
+# *.mp4
+# *.avi
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Weights & Biases
+wandb/
+
+# MLflow
+mlruns/
+
+# DVC
+.dvc/
+
+# Other
+*.cache
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+

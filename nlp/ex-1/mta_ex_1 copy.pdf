@@ -1,0 +1,1721 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "3HqK14JLSStR"
+   },
+   "source": [
+    "## NLP with DL Assignment 1:\n",
+    "# Exploring Word Vectors \n",
+    "### <font color='red'> Due 12:00am, Sun April 27 </font>\n",
+    "\n",
+    "\n",
+    "\n",
+    "Before you start, make sure you read the README.txt in the same directory as this notebook for important setup information. A lot of code is provided in this notebook, and we highly encourage you to read and understand it as part of the learning :)\n",
+    "\n",
+    "If you aren't super familiar with Python, Numpy, or Matplotlib, we recommend you check out a Stanford's [tutorial](https://cs231n.github.io/python-numpy-tutorial/) about Python/Numpy.\n",
+    "\n",
+    "**Assignment Notes:** Please make sure to save the notebook as you go along. Submission Instructions are located at the bottom of the notebook."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:18.086631Z",
+     "start_time": "2025-04-26T17:31:18.077739Z"
+    },
+    "id": "8AGQxROrSStf"
+   },
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "[nltk_data] Downloading package reuters to\n",
+      "[nltk_data]     /Users/naamaavni/nltk_data...\n",
+      "[nltk_data]   Package reuters is already up-to-date!\n"
+     ]
+    }
+   ],
+   "source": [
+    "# All Import Statements Defined Here\n",
+    "# Note: Do not add to this list.\n",
+    "# ----------------\n",
+    "\n",
+    "import sys\n",
+    "assert sys.version_info[0]==3\n",
+    "assert sys.version_info[1] >= 5\n",
+    "\n",
+    "from platform import python_version\n",
+    "assert int(python_version().split(\".\")[1]) >= 5, \"Please upgrade your Python version following the instructions in \\\n",
+    "    the README.txt file found in the same directory as this notebook. Your Python version is \" + python_version()\n",
+    "\n",
+    "from gensim.models import KeyedVectors\n",
+    "from gensim.test.utils import datapath\n",
+    "import pprint\n",
+    "import matplotlib.pyplot as plt\n",
+    "plt.rcParams['figure.figsize'] = [10, 5]\n",
+    "\n",
+    "import nltk\n",
+    "nltk.download('reuters') #to specify download location, optionally add the argument: download_dir='/specify/desired/path/'\n",
+    "from nltk.corpus import reuters\n",
+    "\n",
+    "import numpy as np\n",
+    "import random\n",
+    "import scipy as sp\n",
+    "from sklearn.decomposition import TruncatedSVD\n",
+    "from sklearn.decomposition import PCA\n",
+    "\n",
+    "START_TOKEN = '<START>'\n",
+    "END_TOKEN = '<END>'\n",
+    "\n",
+    "np.random.seed(0)\n",
+    "random.seed(0)\n",
+    "# ----------------"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "SICd5IedSSto"
+   },
+   "source": [
+    "## Word Vectors\n",
+    "\n",
+    "Word Vectors are often used as a fundamental component for downstream NLP tasks, e.g. question answering, text generation, translation, etc., so it is important to build some intuitions as to their strengths and weaknesses. Here, you will explore two types of word vectors: those derived from *co-occurrence matrices*, and those derived via *GloVe*. \n",
+    "\n",
+    "**Note on Terminology:** The terms \"word vectors\" and \"word embeddings\" are often used interchangeably. The term \"embedding\" refers to the fact that we are encoding aspects of a word's meaning in a lower dimensional space. As [Wikipedia](https://en.wikipedia.org/wiki/Word_embedding) states, \"*conceptually it involves a mathematical embedding from a space with one dimension per word to a continuous vector space with a much lower dimension*\"."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "6Eug6AVrSStr"
+   },
+   "source": [
+    "## Part 1: Count-Based Word Vectors\n",
+    "\n",
+    "Most word vector models start from the following idea:\n",
+    "\n",
+    "*You shall know a word by the company it keeps ([Firth, J. R. 1957:11](https://en.wikipedia.org/wiki/John_Rupert_Firth))*\n",
+    "\n",
+    "Many word vector implementations are driven by the idea that similar words, i.e., (near) synonyms, will be used in similar contexts. As a result, similar words will often be spoken or written along with a shared subset of words, i.e., contexts. By examining these contexts, we can try to develop embeddings for our words. With this intuition in mind, many \"old school\" approaches to constructing word vectors relied on word counts. Here we elaborate upon one of those strategies, *co-occurrence matrices* (for more information, see Word Embedding lecture."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "L6uQ9-DVSSts"
+   },
+   "source": [
+    "### Co-Occurrence\n",
+    "\n",
+    "A co-occurrence matrix counts how often things co-occur in some environment. Given some word $w_i$ occurring in the document, we consider the *context window* surrounding $w_i$. Supposing our fixed window size is $n$, then this is the $n$ preceding and $n$ subsequent words in that document, i.e. words $w_{i-n} \\dots w_{i-1}$ and $w_{i+1} \\dots w_{i+n}$. We build a *co-occurrence matrix* $M$, which is a symmetric word-by-word matrix in which $M_{ij}$ is the number of times $w_j$ appears inside $w_i$'s window among all documents.\n",
+    "\n",
+    "**Example: Co-Occurrence with Fixed Window of n=1**:\n",
+    "\n",
+    "Document 1: \"all that glitters is not gold\"\n",
+    "\n",
+    "Document 2: \"all is well that ends well\"\n",
+    "\n",
+    "\n",
+    "|     *    | `<START>` | all | that | glitters | is   | not  | gold  | well | ends | `<END>` |\n",
+    "|----------|-------|-----|------|----------|------|------|-------|------|------|-----|\n",
+    "| `<START>`    | 0     | 2   | 0    | 0        | 0    | 0    | 0     | 0    | 0    | 0   |\n",
+    "| all      | 2     | 0   | 1    | 0        | 1    | 0    | 0     | 0    | 0    | 0   |\n",
+    "| that     | 0     | 1   | 0    | 1        | 0    | 0    | 0     | 1    | 1    | 0   |\n",
+    "| glitters | 0     | 0   | 1    | 0        | 1    | 0    | 0     | 0    | 0    | 0   |\n",
+    "| is       | 0     | 1   | 0    | 1        | 0    | 1    | 0     | 1    | 0    | 0   |\n",
+    "| not      | 0     | 0   | 0    | 0        | 1    | 0    | 1     | 0    | 0    | 0   |\n",
+    "| gold     | 0     | 0   | 0    | 0        | 0    | 1    | 0     | 0    | 0    | 1   |\n",
+    "| well     | 0     | 0   | 1    | 0        | 1    | 0    | 0     | 0    | 1    | 1   |\n",
+    "| ends     | 0     | 0   | 1    | 0        | 0    | 0    | 0     | 1    | 0    | 0   |\n",
+    "| `<END>`      | 0     | 0   | 0    | 0        | 0    | 0    | 1     | 1    | 0    | 0   |\n",
+    "\n",
+    "**Note:** In NLP, we often add `<START>` and `<END>` tokens to represent the beginning and end of sentences, paragraphs or documents. In this case we imagine `<START>` and `<END>` tokens encapsulating each document, e.g., \"`<START>` All that glitters is not gold `<END>`\", and include these tokens in our co-occurrence counts.\n",
+    "\n",
+    "The rows (or columns) of this matrix provide one type of word vectors (those based on word-word co-occurrence), but the vectors will be large in general (linear in the number of distinct words in a corpus). Thus, our next step is to run *dimensionality reduction*. In particular, we will run *SVD (Singular Value Decomposition)*, which is a kind of generalized *PCA (Principal Components Analysis)* to select the top $k$ principal components. Here's a visualization of dimensionality reduction with SVD. In this picture our co-occurrence matrix is $A$ with $n$ rows corresponding to $n$ words. We obtain a full matrix decomposition, with the singular values ordered in the diagonal $S$ matrix, and our new, shorter length-$k$ word vectors in $U_k$.\n",
+    "\n",
+    "![Picture of an SVD](./imgs/svd.png \"SVD\")\n",
+    "\n",
+    "This reduced-dimensionality co-occurrence representation preserves semantic relationships between words, e.g. *doctor* and *hospital* will be closer than *doctor* and *dog*. \n",
+    "\n",
+    "**Notes:** If you can barely remember what an eigenvalue is, here's [a slow, friendly introduction to SVD](https://davetang.org/file/Singular_Value_Decomposition_Tutorial.pdf). In practice, it is challenging to apply full SVD to large corpora because of the memory needed to perform PCA or SVD. However, if you only want the top $k$ vector components for relatively small $k$ — known as [Truncated SVD](https://en.wikipedia.org/wiki/Singular_value_decomposition#Truncated_SVD) — then there are reasonably scalable techniques to compute those iteratively."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "7IKeK4xtSStv"
+   },
+   "source": [
+    "### Plotting Co-Occurrence Word Embeddings\n",
+    "\n",
+    "Here, we will be using the Reuters (business and financial news) corpus. If you haven't run the import cell at the top of this page, please run it now (click it and press SHIFT-RETURN). The corpus consists of 10,788 news documents totaling 1.3 million words. These documents span 90 categories and are split into train and test. For more details, please see https://www.nltk.org/book/ch02.html. We provide a `read_corpus` function below that pulls out only articles from the \"gold\" (i.e. news articles about gold, mining, etc.) category. The function also adds `<START>` and `<END>` tokens to each of the documents, and lowercases words. You do **not** have to perform any other kind of pre-processing."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:25.733744Z",
+     "start_time": "2025-04-26T17:31:25.728538Z"
+    },
+    "id": "xwD2htUoSStw"
+   },
+   "outputs": [],
+   "source": [
+    "def read_corpus(category=\"gold\"):\n",
+    "    \"\"\" Read files from the specified Reuter's category.\n",
+    "        Params:\n",
+    "            category (string): category name\n",
+    "        Return:\n",
+    "            list of lists, with words from each of the processed files\n",
+    "    \"\"\"\n",
+    "    files = reuters.fileids(category)\n",
+    "    return [[START_TOKEN] + [w.lower() for w in list(reuters.words(f))] + [END_TOKEN] for f in files]\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "hVLquFhjSStx"
+   },
+   "source": [
+    "Let's have a look what these documents are like…."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:27.380543Z",
+     "start_time": "2025-04-26T17:31:26.654982Z"
+    },
+    "id": "mC7B9Cb-SSty"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[['<START>', 'western', 'mining', 'to', 'open', 'new', 'gold', 'mine', 'in', 'australia', 'western',\n",
+      "  'mining', 'corp', 'holdings', 'ltd', '&', 'lt', ';', 'wmng', '.', 's', '>', '(', 'wmc', ')',\n",
+      "  'said', 'it', 'will', 'establish', 'a', 'new', 'joint', 'venture', 'gold', 'mine', 'in', 'the',\n",
+      "  'northern', 'territory', 'at', 'a', 'cost', 'of', 'about', '21', 'mln', 'dlrs', '.', 'the',\n",
+      "  'mine', ',', 'to', 'be', 'known', 'as', 'the', 'goodall', 'project', ',', 'will', 'be', 'owned',\n",
+      "  '60', 'pct', 'by', 'wmc', 'and', '40', 'pct', 'by', 'a', 'local', 'w', '.', 'r', '.', 'grace',\n",
+      "  'and', 'co', '&', 'lt', ';', 'gra', '>', 'unit', '.', 'it', 'is', 'located', '30', 'kms', 'east',\n",
+      "  'of', 'the', 'adelaide', 'river', 'at', 'mt', '.', 'bundey', ',', 'wmc', 'said', 'in', 'a',\n",
+      "  'statement', 'it', 'said', 'the', 'open', '-', 'pit', 'mine', ',', 'with', 'a', 'conventional',\n",
+      "  'leach', 'treatment', 'plant', ',', 'is', 'expected', 'to', 'produce', 'about', '50', ',', '000',\n",
+      "  'ounces', 'of', 'gold', 'in', 'its', 'first', 'year', 'of', 'production', 'from', 'mid', '-',\n",
+      "  '1988', '.', 'annual', 'ore', 'capacity', 'will', 'be', 'about', '750', ',', '000', 'tonnes', '.',\n",
+      "  '<END>'],\n",
+      " ['<START>', 'belgium', 'to', 'issue', 'gold', 'warrants', ',', 'sources', 'say', 'belgium',\n",
+      "  'plans', 'to', 'issue', 'swiss', 'franc', 'warrants', 'to', 'buy', 'gold', ',', 'with', 'credit',\n",
+      "  'suisse', 'as', 'lead', 'manager', ',', 'market', 'sources', 'said', '.', 'no', 'confirmation',\n",
+      "  'or', 'further', 'details', 'were', 'immediately', 'available', '.', '<END>'],\n",
+      " ['<START>', 'belgium', 'launches', 'bonds', 'with', 'gold', 'warrants', 'the', 'kingdom', 'of',\n",
+      "  'belgium', 'is', 'launching', '100', 'mln', 'swiss', 'francs', 'of', 'seven', 'year', 'notes',\n",
+      "  'with', 'warrants', 'attached', 'to', 'buy', 'gold', ',', 'lead', 'mananger', 'credit', 'suisse',\n",
+      "  'said', '.', 'the', 'notes', 'themselves', 'have', 'a', '3', '-', '3', '/', '8', 'pct', 'coupon',\n",
+      "  'and', 'are', 'priced', 'at', 'par', '.', 'payment', 'is', 'due', 'april', '30', ',', '1987',\n",
+      "  'and', 'final', 'maturity', 'april', '30', ',', '1994', '.', 'each', '50', ',', '000', 'franc',\n",
+      "  'note', 'carries', '15', 'warrants', '.', 'two', 'warrants', 'are', 'required', 'to', 'allow',\n",
+      "  'the', 'holder', 'to', 'buy', '100', 'grammes', 'of', 'gold', 'at', 'a', 'price', 'of', '2', ',',\n",
+      "  '450', 'francs', ',', 'during', 'the', 'entire', 'life', 'of', 'the', 'bond', '.', 'the',\n",
+      "  'latest', 'gold', 'price', 'in', 'zurich', 'was', '2', ',', '045', '/', '2', ',', '070', 'francs',\n",
+      "  'per', '100', 'grammes', '.', '<END>']]\n"
+     ]
+    }
+   ],
+   "source": [
+    "reuters_corpus = read_corpus()\n",
+    "pprint.pprint(reuters_corpus[:3], compact=True, width=100)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "tfa216H1SSt0"
+   },
+   "source": [
+    "### Question 1.1: Implement `distinct_words` [code]\n",
+    "\n",
+    "Write a method to work out the distinct words (word types) that occur in the corpus. You can do this with `for` loops, but it's more efficient to do it with Python list comprehensions. In particular, [this](https://coderwall.com/p/rcmaea/flatten-a-list-of-lists-in-one-line-in-python) may be useful to flatten a list of lists. If you're not familiar with Python list comprehensions in general, here's [more information](https://python-3-patterns-idioms-test.readthedocs.io/en/latest/Comprehensions.html).\n",
+    "\n",
+    "Your returned `corpus_words` should be sorted. You can use python's `sorted` function for this.\n",
+    "\n",
+    "You may find it useful to use [Python sets](https://www.w3schools.com/python/python_sets.asp) to remove duplicate words."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:29.811727Z",
+     "start_time": "2025-04-26T17:31:29.808299Z"
+    },
+    "id": "NjJABbVFSSt1"
+   },
+   "outputs": [],
+   "source": [
+    "def distinct_words(corpus):\n",
+    "    \"\"\" Determine a list of distinct words for the corpus.\n",
+    "        Params:\n",
+    "            corpus (list of list of strings): corpus of documents\n",
+    "        Return:\n",
+    "            corpus_words (list of strings): sorted list of distinct words across the corpus\n",
+    "            n_corpus_words (integer): number of distinct words across the corpus\n",
+    "    \"\"\"\n",
+    "    corpus_words = []\n",
+    "    n_corpus_words = -1\n",
+    "    \n",
+    "    ### SOLUTION BEGIN\n",
+    "    flattened_list = [y for x in corpus for y in x]\n",
+    "    corpus_words = sorted(set(flattened_list))\n",
+    "    n_corpus_words = len(corpus_words)\n",
+    "    ### SOLUTION END\n",
+    "\n",
+    "    return corpus_words, n_corpus_words"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:35.767935Z",
+     "start_time": "2025-04-26T17:31:35.762922Z"
+    },
+    "id": "iKfXBXySSSt3"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "--------------------------------------------------------------------------------\n",
+      "Passed All Tests!\n",
+      "--------------------------------------------------------------------------------\n"
+     ]
+    }
+   ],
+   "source": [
+    "# ---------------------\n",
+    "# Run this sanity check\n",
+    "# Note that this not an exhaustive check for correctness.\n",
+    "# ---------------------\n",
+    "\n",
+    "# Define toy corpus\n",
+    "test_corpus = [\"{} All that glitters isn't gold {}\".format(START_TOKEN, END_TOKEN).split(\" \"), \"{} All's well that ends well {}\".format(START_TOKEN, END_TOKEN).split(\" \")]\n",
+    "\n",
+    "test_corpus_words, num_corpus_words = distinct_words(test_corpus)\n",
+    "\n",
+    "\n",
+    "# Correct answers\n",
+    "ans_test_corpus_words = sorted([START_TOKEN, \"All\", \"ends\", \"that\", \"gold\", \"All's\", \"glitters\", \"isn't\", \"well\", END_TOKEN])\n",
+    "ans_num_corpus_words = len(ans_test_corpus_words)\n",
+    "\n",
+    "# Test correct number of words\n",
+    "assert(num_corpus_words == ans_num_corpus_words), \"Incorrect number of distinct words. Correct: {}. Yours: {}\".format(ans_num_corpus_words, num_corpus_words)\n",
+    "\n",
+    "# Test correct words\n",
+    "assert (test_corpus_words == ans_test_corpus_words), \"Incorrect corpus_words.\\nCorrect: {}\\nYours:   {}\".format(str(ans_test_corpus_words), str(test_corpus_words))\n",
+    "\n",
+    "# Print Success\n",
+    "print (\"-\" * 80)\n",
+    "print(\"Passed All Tests!\")\n",
+    "print (\"-\" * 80)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "ymDFJn_lSSt5"
+   },
+   "source": [
+    "### Question 1.2: Implement `compute_co_occurrence_matrix` [code]\n",
+    "\n",
+    "Write a method that constructs a co-occurrence matrix for a certain window-size $n$ (with a default of 4), considering words $n$ before and $n$ after the word in the center of the window. Here, we start to use `numpy (np)` to represent vectors, matrices, and tensors.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:36.687688Z",
+     "start_time": "2025-04-26T17:31:36.682530Z"
+    },
+    "id": "v8MIy3KDSSt6"
+   },
+   "outputs": [],
+   "source": [
+    "def compute_co_occurrence_matrix(corpus, window_size=4):\n",
+    "    \"\"\" Compute co-occurrence matrix for the given corpus and window_size (default of 4).\n",
+    "    \n",
+    "        Note: Each word in a document should be at the center of a window. Words near edges will have a smaller\n",
+    "              number of co-occurring words.\n",
+    "              \n",
+    "              For example, if we take the document \"<START> All that glitters is not gold <END>\" with window size of 4,\n",
+    "              \"All\" will co-occur with \"<START>\", \"that\", \"glitters\", \"is\", and \"not\".\n",
+    "    \n",
+    "        Params:\n",
+    "            corpus (list of list of strings): corpus of documents\n",
+    "            window_size (int): size of context window\n",
+    "        Return:\n",
+    "            M (a symmetric numpy matrix of shape (number of unique words in the corpus , number of unique words in the corpus)): \n",
+    "                Co-occurence matrix of word counts. \n",
+    "                The ordering of the words in the rows/columns should be the same as the ordering of the words given by the distinct_words function.\n",
+    "            word2ind (dict): dictionary that maps word to index (i.e. row/column number) for matrix M.\n",
+    "    \"\"\"\n",
+    "    words, n_words = distinct_words(corpus)\n",
+    "    M = None\n",
+    "    word2ind = {}\n",
+    "    \n",
+    "    ### SOLUTION BEGIN\n",
+    "    # create initial M in size nXn\n",
+    "    M = np.zeros((n_words, n_words))\n",
+    "    word2ind = dict(zip(words, range(n_words)))\n",
+    "\n",
+    "    for document in corpus:\n",
+    "        for i, center_word in enumerate(document):\n",
+    "            center_index = word2ind[center_word]\n",
+    "            left_bound = max(0, i - window_size)\n",
+    "            right_bound = min(len(document), i + window_size + 1)\n",
+    "\n",
+    "            for j in range(left_bound, right_bound):\n",
+    "                if i != j:\n",
+    "                    neighbor_word = document[j]\n",
+    "                    neighbor_index = word2ind[neighbor_word]\n",
+    "                    M[center_index, neighbor_index] += 1\n",
+    "\n",
+    "\n",
+    "    # ### SOLUTION END\n",
+    "    #\n",
+    "    return M, word2ind"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:40.041981Z",
+     "start_time": "2025-04-26T17:31:40.028653Z"
+    },
+    "id": "u-6ID1qhSSt7"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "--------------------------------------------------------------------------------\n",
+      "Passed All Tests!\n",
+      "--------------------------------------------------------------------------------\n"
+     ]
+    }
+   ],
+   "source": [
+    "# ---------------------\n",
+    "# Run this sanity check\n",
+    "# Note that this is not an exhaustive check for correctness.\n",
+    "# ---------------------\n",
+    "\n",
+    "# Define toy corpus and get student's co-occurrence matrix\n",
+    "test_corpus = [\"{} All that glitters isn't gold {}\".format(START_TOKEN, END_TOKEN).split(\" \"), \"{} All's well that ends well {}\".format(START_TOKEN, END_TOKEN).split(\" \")]\n",
+    "M_test, word2ind_test = compute_co_occurrence_matrix(test_corpus, window_size=1)\n",
+    "\n",
+    "# Correct M and word2ind\n",
+    "M_test_ans = np.array( \n",
+    "    [[0., 0., 0., 0., 0., 0., 1., 0., 0., 1.,],\n",
+    "     [0., 0., 1., 1., 0., 0., 0., 0., 0., 0.,],\n",
+    "     [0., 1., 0., 0., 0., 0., 0., 0., 1., 0.,],\n",
+    "     [0., 1., 0., 0., 0., 0., 0., 0., 0., 1.,],\n",
+    "     [0., 0., 0., 0., 0., 0., 0., 0., 1., 1.,],\n",
+    "     [0., 0., 0., 0., 0., 0., 0., 1., 1., 0.,],\n",
+    "     [1., 0., 0., 0., 0., 0., 0., 1., 0., 0.,],\n",
+    "     [0., 0., 0., 0., 0., 1., 1., 0., 0., 0.,],\n",
+    "     [0., 0., 1., 0., 1., 1., 0., 0., 0., 1.,],\n",
+    "     [1., 0., 0., 1., 1., 0., 0., 0., 1., 0.,]]\n",
+    ")\n",
+    "ans_test_corpus_words = sorted([START_TOKEN, \"All\", \"ends\", \"that\", \"gold\", \"All's\", \"glitters\", \"isn't\", \"well\", END_TOKEN])\n",
+    "word2ind_ans = dict(zip(ans_test_corpus_words, range(len(ans_test_corpus_words))))\n",
+    "\n",
+    "# Test correct word2ind\n",
+    "assert (word2ind_ans == word2ind_test), \"Your word2ind is incorrect:\\nCorrect: {}\\nYours: {}\".format(word2ind_ans, word2ind_test)\n",
+    "\n",
+    "# Test correct M shape\n",
+    "assert (M_test.shape == M_test_ans.shape), \"M matrix has incorrect shape.\\nCorrect: {}\\nYours: {}\".format(M_test.shape, M_test_ans.shape)\n",
+    "\n",
+    "# Test correct M values\n",
+    "for w1 in word2ind_ans.keys():\n",
+    "    idx1 = word2ind_ans[w1]\n",
+    "    for w2 in word2ind_ans.keys():\n",
+    "        idx2 = word2ind_ans[w2]\n",
+    "        student = M_test[idx1, idx2]\n",
+    "        correct = M_test_ans[idx1, idx2]\n",
+    "        if student != correct:\n",
+    "            print(\"Correct M:\")\n",
+    "            print(M_test_ans)\n",
+    "            print(\"Your M: \")\n",
+    "            print(M_test)\n",
+    "            raise AssertionError(\"Incorrect count at index ({}, {})=({}, {}) in matrix M. Yours has {} but should have {}.\".format(idx1, idx2, w1, w2, student, correct))\n",
+    "\n",
+    "# Print Success\n",
+    "print (\"-\" * 80)\n",
+    "print(\"Passed All Tests!\")\n",
+    "print (\"-\" * 80)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "K-nyJnAASSt9"
+   },
+   "source": [
+    "### Question 1.3: Implement `reduce_to_k_dim` [code]\n",
+    "\n",
+    "Construct a method that performs dimensionality reduction on the matrix to produce k-dimensional embeddings. Use SVD to take the top k components and produce a new matrix of k-dimensional embeddings. \n",
+    "\n",
+    "**Note:** All of numpy, scipy, and scikit-learn (`sklearn`) provide *some* implementation of SVD, but only scipy and sklearn provide an implementation of Truncated SVD, and only sklearn provides an efficient randomized algorithm for calculating large-scale Truncated SVD. So please use [sklearn.decomposition.TruncatedSVD](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.TruncatedSVD.html)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:42.380615Z",
+     "start_time": "2025-04-26T17:31:42.375945Z"
+    },
+    "id": "truGMjifSSt9"
+   },
+   "outputs": [],
+   "source": [
+    "def reduce_to_k_dim(M, k=2):\n",
+    "    \"\"\" Reduce a co-occurence count matrix of dimensionality (num_corpus_words, num_corpus_words)\n",
+    "        to a matrix of dimensionality (num_corpus_words, k) using the following SVD function from Scikit-Learn:\n",
+    "            - http://scikit-learn.org/stable/modules/generated/sklearn.decomposition.TruncatedSVD.html\n",
+    "    \n",
+    "        Params:\n",
+    "            M (numpy matrix of shape (number of unique words in the corpus , number of unique words in the corpus)): co-occurence matrix of word counts\n",
+    "            k (int): embedding size of each word after dimension reduction\n",
+    "        Return:\n",
+    "            M_reduced (numpy matrix of shape (number of corpus words, k)): matrix of k-dimensioal word embeddings.\n",
+    "                    In terms of the SVD from math class, this actually returns U * S\n",
+    "    \"\"\"    \n",
+    "    n_iters = 10     # Use this parameter in your call to `TruncatedSVD`\n",
+    "    M_reduced = None\n",
+    "    print(\"Running Truncated SVD over %i words...\" % (M.shape[0]))\n",
+    "    \n",
+    "    ### SOLUTION BEGIN\n",
+    "    svd = TruncatedSVD(n_components=k, n_iter=n_iters)\n",
+    "    M_reduced = svd.fit_transform(M)\n",
+    "    ### SOLUTION END\n",
+    "\n",
+    "    print(\"Done.\")\n",
+    "    return M_reduced"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:45.011930Z",
+     "start_time": "2025-04-26T17:31:44.999840Z"
+    },
+    "id": "7pqKuqvhSSt-"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Running Truncated SVD over 10 words...\n",
+      "Done.\n",
+      "--------------------------------------------------------------------------------\n",
+      "Passed All Tests!\n",
+      "--------------------------------------------------------------------------------\n"
+     ]
+    }
+   ],
+   "source": [
+    "# ---------------------\n",
+    "# Run this sanity check\n",
+    "# Note that this is not an exhaustive check for correctness \n",
+    "# In fact we only check that your M_reduced has the right dimensions.\n",
+    "# ---------------------\n",
+    "\n",
+    "# Define toy corpus and run student code\n",
+    "test_corpus = [\"{} All that glitters isn't gold {}\".format(START_TOKEN, END_TOKEN).split(\" \"), \"{} All's well that ends well {}\".format(START_TOKEN, END_TOKEN).split(\" \")]\n",
+    "M_test, word2ind_test = compute_co_occurrence_matrix(test_corpus, window_size=1)\n",
+    "M_test_reduced = reduce_to_k_dim(M_test, k=2)\n",
+    "\n",
+    "# Test proper dimensions\n",
+    "assert (M_test_reduced.shape[0] == 10), \"M_reduced has {} rows; should have {}\".format(M_test_reduced.shape[0], 10)\n",
+    "assert (M_test_reduced.shape[1] == 2), \"M_reduced has {} columns; should have {}\".format(M_test_reduced.shape[1], 2)\n",
+    "\n",
+    "# Print Success\n",
+    "print (\"-\" * 80)\n",
+    "print(\"Passed All Tests!\")\n",
+    "print (\"-\" * 80)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "apZknsLoSSt_"
+   },
+   "source": [
+    "### Question 1.4: Implement `plot_embeddings` [code]\n",
+    "\n",
+    "Here you will write a function to plot a set of 2D vectors in 2D space. For graphs, we will use Matplotlib (`plt`).\n",
+    "\n",
+    "For this example, you may find it useful to adapt [this code](http://web.archive.org/web/20190924160434/https://www.pythonmembers.club/2018/05/08/matplotlib-scatter-plot-annotate-set-text-at-label-each-point/). In the future, a good way to make a plot is to look at [the Matplotlib gallery](https://matplotlib.org/gallery/index.html), find a plot that looks somewhat like what you want, and adapt the code they give."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:47.954131Z",
+     "start_time": "2025-04-26T17:31:47.946528Z"
+    },
+    "id": "dDcCZE5lSSuA"
+   },
+   "outputs": [],
+   "source": [
+    "\n",
+    "def plot_embeddings(M_reduced, word2ind, words):\n",
+    "    \"\"\" Plot in a scatterplot the embeddings of the words specified in the list \"words\".\n",
+    "        NOTE: do not plot all the words listed in M_reduced / word2ind.\n",
+    "        Include a label next to each point.\n",
+    "        \n",
+    "        Params:\n",
+    "            M_reduced (numpy matrix of shape (number of unique words in the corpus , 2)): matrix of 2-dimensioal word embeddings\n",
+    "            word2ind (dict): dictionary that maps word to indices for matrix M\n",
+    "            words (list of strings): words whose embeddings we want to visualize\n",
+    "    \"\"\"\n",
+    "\n",
+    "    ### SOLUTION BEGIN\n",
+    "    plt.figure(figsize=(10, 10))\n",
+    "    for word in words:\n",
+    "        if word in word2ind:\n",
+    "            index = word2ind[word]\n",
+    "            embedding = M_reduced[index]\n",
+    "            plt.scatter(embedding[0], embedding[1])\n",
+    "            plt.annotate(word, xy=(embedding[0], embedding[1]), xytext=(5, 2), textcoords='offset points', ha='right', va='bottom')\n",
+    "    plt.show()\n",
+    "    ### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:50.480537Z",
+     "start_time": "2025-04-26T17:31:50.093054Z"
+    },
+    "id": "gHxOMWPxSSuB"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "--------------------------------------------------------------------------------\n",
+      "Outputted Plot:\n"
+     ]
+    },
+    {
+     "data": {
+      "image/png": "iVBORw0KGgoAAAANSUhEUgAAA08AAAMtCAYAAABHAkpLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAPYQAAD2EBqD+naQAATHNJREFUeJzt3XucVXW9+P/3cJnhIrO9ADOQCGQKImRckotfFZMG9Kh5PAneRjnalOfXRTJPShcVH48kO1mZZqVfjSxTKuTY+aocsERNLgYOmpeIDIN0hovBDFgOCOv3B7lrnAE+g2yGy/P5eKzHca/9WWvWWme13S/X3msXZVmWBQAAADvUprU3AAAAYF8gngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABO1aewNaw9atW+O1116LLl26RFFRUWtvDgAA0EqyLIsNGzZEz549o02bHV9bOiDj6bXXXotevXq19mYAAAB7iZUrV8bhhx++wzEHZDx16dIlIrYdoNLS0lbeGgAAoLXU19dHr1698o2wIwdkPL39Ub3S0lLxBAAAJH2dxw0jAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiKftGD16dEyaNGm3rW/ixIlx9tlnb/f5hoaG+MAHPhBFRUWxZMmS3fZ3AQAg1Z56D/yVr3wlRo0aFZ06dYqDDz54t/29QhNPe4nPf/7z0bNnz9beDAAAKLhNmzbFueeeG//xH//R2pvSIuKpGRMnTozHH388brnlligqKoqioqJ45ZVX4sUXX4zTTz89DjrooCgrK4vKyspYu3Ztfrmf//znMWjQoOjYsWMcdthhMWbMmHjjjTfi+uuvjx/+8Ifx4IMP5tc3d+7c/HKPPPJIzJ49O77+9a+3wt4CAMCefQ88ZcqU+OxnPxuDBg1qpb3dNeKpGbfcckuMHDkyqqqqoqamJmpqaqJ9+/Zx8sknxwc+8IFYtGhRzJo1K1atWhXjx4+PiIiampo4//zz49JLL42XXnop5s6dG+ecc05kWRZXXXVVjB8/PsaNG5df36hRoyIiYtWqVVFVVRU/+tGPolOnTq252wAAHMD25HvgfVW71t6AvVEul4vi4uLo1KlTlJeXR0TEtddeG0OGDIkbb7wxP+7uu++OXr16xe9///vYuHFjvPXWW3HOOedE7969IyIalXTHjh2joaEhv76IiCzLYuLEiXH55ZfHsGHD4pVXXtkzOwgAAO+wp94D78vEU6LFixfHY489FgcddFCT515++eWoqKiIU089NQYNGhRjx46NioqK+OhHPxqHHHLIdtd56623Rn19fUyePLmQmw4AALukEO+B92U+tpdo69atceaZZ8aSJUsaTcuWLYuTTjop2rZtG3PmzIlHHnkkBgwYELfeemv069cvli9fvt11/upXv4oFCxZESUlJtGvXLt73vvdFRMSwYcPikksu2VO7BgAAzSrEe+B9mXjajuLi4tiyZUv+8ZAhQ+KFF16IPn36xPve975GU+fOnSMioqioKE444YSYMmVKVFdXR3FxccycObPZ9UVEfPvb345nn302fxI+/PDDERExffr0+MpXvrKH9hQAALbZE++B92XiaTv69OkTCxcujFdeeSXWrl0bn/zkJ+Mvf/lLnH/++fH000/HH//4x5g9e3ZceumlsWXLlli4cGHceOONsWjRolixYkU88MADsWbNmjjmmGPy63vuuedi6dKlsXbt2ti8eXMcccQRMXDgwPx09NFHR0TEkUceGYcffnhr7j4AAAegPfEeOCJixYoVsWTJklixYkVs2bIlfzFh48aNrbn7OyWetuOqq66Ktm3bxoABA6Jbt26xadOmeOqpp2LLli0xduzYGDhwYFxxxRWRy+WiTZs2UVpaGk888UScfvrpcfTRR8eXvvSluPnmm+O0006LiIiqqqro169fDBs2LLp16xZPPfVUK+8hAAA0tqfeA1977bUxePDguO6662Ljxo0xePDgGDx4cCxatKg1d3+nirIsy1p7I/a0+vr6yOVyUVdXF6Wlpa26LdmWLfHXRYvjrTVrol23btFp2NAoatu2VbcJAAAKZcvWLJ5e/pdYveHN6N6lQxzf99Bo26ao1banJW3gbnutqH727Fh149R4q7Y2P69deXmUfWFylFZUtOKWAQDA7jfr+ZqY8j8vRk3dm/l5PXId4rozB8S4gT1accvSFPRje0888USceeaZ0bNnzygqKor//u//3ukyjz/+eAwdOjQ6dOgQ733ve+N73/tekzEzZsyIAQMGRElJSQwYMCD/hbR9Sf3s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mX73u981GjdjxowYMGBAlJSUxIABA2LmzJmF3g0AAOAAV9B4mj59ekyaNCm++MUvRnV1dZx44olx2mmnxYoVK3a43NKlS6OmpiY/HXXUUfnn5s+fHxMmTIjKysp49tlno7KyMsaPHx8LFy4s5K4AAAAHuKIsy7JCrXz48OExZMiQ+O53v5ufd8wxx8TZZ58dU6dObTJ+7ty5ccopp8S6devi4IMPbnadEyZMiPr6+njkkUfy88aNGxeHHHJI3Hfffc0u09DQEA0NDfnH9fX10atXr6irq4vS0tJd3DsAAGBfV19fH7lcLqkNCnbladOmTbF48eKoqKhoNL+ioiLmzZu3w2UHDx4cPXr0iFNPPTUee+yxRs/Nnz+/yTrHjh27w3VOnTo1crlcfurVq1cL9wYAADjQFSye1q5dG1u2bImysrJG88vKyqK2trbZZXr06BF33HFHzJgxIx544IHo169fnHrqqfHEE0/kx9TW1rZonRERkydPjrq6uvy0cuXKd7FnAADAgahdof9AUVFRo8dZljWZ97Z+/fpFv3798o9HjhwZK1eujK9//etx0kkn7dI6IyJKSkqipKRkVzYfAAAgIgp45alr167Rtm3bJleEVq9e3eTK0Y6MGDEili1bln9cXl7+rtcJAADQUgWLp+Li4hg6dGjMmTOn0fw5c+bEqFGjktdTXV0dPXr0yD8eOXJkk3XOnj27ResEAABoqYJ+bO/KK6+MysrKGDZsWIwcOTLuuOOOWLFiRVx++eURse27SK+++mrcc889ERHxrW99K/r06RPHHntsbNq0KX784x/HjBkzYsaMGfl1XnHFFXHSSSfFTTfdFB/5yEfiwQcfjEcffTR+/etfF3JXAACAA1xB42nChAnx+uuvxw033BA1NTUxcODAePjhh6N3794REVFTU9PoN582bdoUV111Vbz66qvRsWPHOPbYY+Ohhx6K008/PT9m1KhRcf/998eXvvSl+PKXvxxHHnlkTJ8+PYYPH17IXQEAAA5wBf2dp71VS+7lDgAA7L/2it95AgAA2J+IJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASFDweLr99tujb9++0aFDhxg6dGg8+eST2x37wAMPxIc//OHo1q1blJaWxsiRI+N///d/G42ZNm1aFBUVNZnefPPNQu8KAABwACtoPE2fPj0mTZoUX/ziF6O6ujpOPPHEOO2002LFihXNjn/iiSfiwx/+cDz88MOxePHiOOWUU+LMM8+M6urqRuNKS0ujpqam0dShQ4dC7goAAHCAK8qyLCvUyocPHx5DhgyJ7373u/l5xxxzTJx99tkxderUpHUce+yxMWHChLj22msjYtuVp0mTJsX69et3ebvq6+sjl8tFXV1dlJaW7vJ6AACAfVtL2qBgV542bdoUixcvjoqKikbzKyoqYt68eUnr2Lp1a2zYsCEOPfTQRvM3btwYvXv3jsMPPzzOOOOMJlem3qmhoSHq6+sbTQAAAC1RsHhau3ZtbNmyJcrKyhrNLysri9ra2qR13HzzzfHGG2/E+PHj8/P69+8f06ZNi1/84hdx3333RYcOHeKEE06IZcuWbXc9U6dOjVwul5969eq1azsFAAAcsAp+w4iioqJGj7MsazKvOffdd19cf/31MX369OjevXt+/ogRI+Kiiy6K4447Lk488cT46U9/GkcffXTceuut213X5MmTo66uLj+tXLly13cIAAA4ILUr1Iq7du0abdu2bXKVafXq1U2uRr3T9OnT47LLLouf/exnMWbMmB2ObdOmTXzwgx/c4ZWnkpKSKCkpSd94AACAdyjYlafi4uIYOnRozJkzp9H8OXPmxKhRo7a73H333RcTJ06Mn/zkJ/Ev//IvO/07WZbFkiVLokePHu96mwEAALanYFeeIiKuvPLKqKysjGHDhsXIkSPjjjvuiBUrVsTll18eEds+Tvfqq6/GPffcExHbwuniiy+OW265JUaMGJG/atWxY8fI5XIRETFlypQYMWJEHHXUUVFfXx/f/va3Y8mSJfGd73ynkLsCAAAc4AoaTxMmTIjXX389brjhhqipqYmBAwfGww8/HL17946IiJqamka/+fT9738/3nrrrfjkJz8Zn/zkJ/PzL7nkkpg2bVpERKxfvz4+/vGPR21tbeRyuRg8eHA88cQTcfzxxxdyVwAAgANcQX/naW/ld54AAICIveR3ngAAAPYn4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCYC9zujRo2PSpEm7bX0TJ06Ms88+u8n8Pn36RFFRUaPpmmuu2W1/F4D9S7vW3gAAaE033HBDVFVV5R8fdNBBrbg1AOzNXHkCYK8yceLEePzxx+OWW27JXw165ZVX4sUXX4zTTz89DjrooCgrK4vKyspYu3Ztfrmf//znMWjQoOjYsWMcdthhMWbMmHjjjTfi+uuvjx/+8Ifx4IMP5tc3d+7c/HJdunSJ8vLy/CSeANieoizLstbeiD2tvr4+crlc1NXVRWlpaWtvDgD/pK6uLk477bQYOHBg3HDDDRERsWXLlvjABz4QVVVVcfHFF8ff/va3uPrqq+Ott96KX/3qV1FTUxNH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CQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAEBY2ndevWRWVlZeRyucjlclFZWRnr16/f7vjNmzfH1VdfHYMGDYrOnTtHz5494+KLL47XXnut0bjRo0dHUVFRo+m8884r5K4AAAAHuILG0wUXXBBLliyJWbNmxaxZs2LJkiVRWVm53fF//etf45lnnokvf/nL8cwzz8QDDzwQv//97+Oss85qMraqqipqamry0/e///1C7goAAHCAa1eoFb/00ksxa9asWLBgQQwfPjwiIu68884YOXJkLF26NPr169dkmVwuF3PmzGk079Zbb43jjz8+VqxYEUcccUR+fqdOnaK8vLxQmw8AANBIwa48zZ8/P3K5XD6cIiJGjBgRuVwu5s2bl7yeurq6KCoqioMPPrjR/HvvvTe6du0axx57bFx11VWxYcOG7a6joaEh6uvrG00AAAAtUbArT7W1tdG9e/cm87t37x61tbVJ63jzzTfjmmuuiQsuuCBKS0vz8y+88MLo27dvlJeXx/PPPx+TJ0+OZ599tslVq7dNnTo1pkyZsms7AgAAELtw5en6669vcrOGd06LFi2KiIiioqImy2dZ1uz8d9q8eXOcd955sXXr1rj99tsbPVdVVRVjxoyJgQMHxnnnnRc///nP49FHH41nnnmm2XVNnjw56urq8tPKlStbutsAAMABrsVXnj71qU/t9M52ffr0ieeeey5WrVrV5Lk1a9ZEWVnZDpffvHlzjB8/PpYvXx6/+tWvGl11as6QIUOiffv2sWzZshgyZEiT50tKSqKkpGSH6wAAANiRFsdT165do2vXrjsdN3LkyKirq4unn346jj/++IiIWLhwYdTV1cWoUaO2u9zb4bRs2bJ47LHH4rDDDtvp33rhhRdi8+bN0aNHj/QdAQAAaIGC3TDimGOOiXHjxkVVVVUsWLAgFixYEFVVVXHGGWc0utNe//79Y+bMmRER8dZbb8VHP/rRWLRoUdx7772xZcuWqK2tjdra2ti0aVNERLz88stxww03xKJFi+KVV16Jhx9+OM4999wYPHhwnHDCCYXaHQAA4ABX0N95uvfee2PQoEFRUVERFRUV8f73vz9+9KMfNRqzdOnSqKuri4iIP//5z/GLX/wi/vznP8cHPvCB6NGjR356+w59xcXF8ctf/jLGjh0b/fr1i8985jNRUVERjz76aLRt27aQuwMAABzAirIsy1p7I/a0+vr6yOVyUVdXt9PvUwEAAPuvlrRBQa88AQAA7C/EEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACQoaT+vWrYvKysrI5XKRy+WisrIy1q9fv8NlJk6cGEVFRY2mESNGNBrT0NAQn/70p6Nr167RuXPnOOuss+LPf/5zAfcEAAA40BU0ni644IJYsmRJzJo1K2bNmhVLliyJysrKnS43bty4qKmpyU8PP/xwo+cnTZoUM2fOjPvvvz9+/etfx8aNG+OMM86ILVu2FGpXAACAA1y7Qq34pZdeilmzZsWCBQti+PDhERFx5513xsiRI2Pp0qXRr1+/7S5bUlIS5eXlzT5XV1cXd911V/zoRz+KMWPGRETEj3/84+jVq1c8+uijMXbs2CbLNDQ0RENDQ/5xfX39u9k1AADgAFSwK0/z58+PXC6XD6eIiBEjRkQul4t58+btcNm5c+dG9+7d4+ijj46qqqpYvXp1/rnFixfH5s2bo6KiIj+vZ8+eMXDgwO2ud+rUqfmPDuZyuejVq9e73DsAAOBAU7B4qq2tje7duzeZ371796itrd3ucqeddlrce++98atf/Spuvvnm+M1vfhMf+tCH8leOamtro7i4OA455JBGy5WVlW13vZMnT466urr8tHLlynexZwAAwIGoxR/bu/7662PKlCk7HPOb3/wmIiKKioqaPJdlWbPz3zZhwoT8Pw8cODCGDRsWvXv3joceeijOOeec7S63o/WWlJRESUnJDrcZAABgR1ocT5/61KfivPPO2+GYPn36xHPPPRerVq1q8tyaNWuirKws+e/16NEjevfuHcuWLYuIiPLy8ti0aVOsW7eu0dWn1atXx6hRo5LXCwAA0BItjqeuXbtG165ddzpu5MiRUVdXF08//XQcf/zxERGxcOHCqKura1HkvP7667Fy5cro0aNHREQMHTo02rdvH3PmzInx48dHRERNTU08//zz8bWvfa2luwMAAJCkYN95OuaYY2LcuHFRVVUVCxYsiAULFkRVVVWcccYZje60179//5g5c2ZERGzcuDGuuuqqmD9/frzyyisxd+7cOPPMM6Nr167xr//6rxERkcvl4rLLLovPfe5z8ctf/jKqq6vjoosuikGDBuXvvgcAALC7FexW5RER9957b3zmM5/J3xnvrLPOittuu63RmKVLl0ZdXV1ERLRt2zZ++9vfxj333BPr16+PHj16xCmnnBLTp0+PLl265Jf55je/Ge3atYvx48fH3/72tzj11FNj2rRp0bZt20LuDgAAcAAryrIsa+2N2NPq6+sjl8tFXV1dlJaWtvbmAAAAraQlbVCwj+0BAADsT8QTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPAEAACQQTwAAAAnEEwAAQALxBAAAkEA8AQAAJBBPAAAACcQTAABAAvEEAACQQDwBAAAkKGg8rVu3LiorKyOXy0Uul4vKyspYv379DpcpKipqdvqv//qv/JjRo0c3ef68884r5K4AAAAHuHaFXPkFF1wQf/7zn2PWrFkREfHxj388Kisr43/+53+2u0xNTU2jx4888khcdtll8W//9m+N5ldVVcUNN9yQf9yxY8fduOUAAACNFSyeXnrppZg1a1YsWLAghg8fHhERd955Z4wcOTKWLl0a/fr1a3a58vLyRo8ffPDBOOWUU+K9731vo/mdOnVqMhYAAKBQCvaxvfnz50cul8uHU0TEiBEjIpfLxbx585LWsWrVqnjooYfisssua/LcvffeG127do1jjz02rrrqqtiwYcN219PQ0BD19fWNJgAAgJYo2JWn2tra6N69e5P53bt3j9ra2qR1/PCHP4wuXbrEOeec02j+hRdeGH379o3y8vJ4/vnnY/LkyfHss8/GnDlzml3P1KlTY8qUKS3fCQAAgL9r8ZWn66+/frs3dXh7WrRoUURsu/nDO2VZ1uz85tx9991x4YUXRocOHRrNr6qqijFjxsTAgQPjvPPOi5///Ofx6KOPxjPPPNPseiZPnhx1dXX5aeXKlS3cawAA4EDX4itPn/rUp3Z6Z7s+ffrEc889F6tWrWry3Jo1a6KsrGynf+fJJ5+MpUuXxvTp03c6dsiQIdG+fftYtmxZDBkypMnzJSUlUVJSstP1AAAAbE+L46lr167RtWvXnY4bOXJk1NXVxdNPPx3HH398REQsXLgw6urqYtSoUTtd/q677oqhQ4fGcccdt9OxL7zwQmzevDl69Oix8x0AAADYBQW7YcQxxxwT48aNi6qqqliwYEEsWLAgqqqq4owzzmh0p73+/fvHzJkzGy1bX18fP/vZz+JjH/tYk/W+/PLLccMNN8SiRYvilVdeiYcffjjOPffcGDx4cJxwwgmF2h0AAOAAV9Afyb333ntj0KBBUVFRERUVFfH+978/fvSjHzUas3Tp0qirq2s07/77748sy+L8889vss7i4uL45S9/GWPHjo1+/frFZz7zmaioqIhHH3002rZtW8jdAQAADmBFWZZlrb0Re1p9fX3kcrmoq6uL0tLS1t4cAACglbSkDQp65QkAAGB/IZ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABKIJwAAgATiCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggnrZj9OjRMWnSpN22vokTJ8bZZ5/daN4rr7wSl112WfTt2zc6duwYRx55ZFx33XWxadOm3fZ3AQAg1Z54DxwRcdZZZ8URRxwRHTp0iB49ekRlZWW89tpru+3vFop4akW/+93vYuvWrfH9738/XnjhhfjmN78Z3/ve9+ILX/hCa28aAAAUzCmnnBI//elPY+nSpTFjxox4+eWX46Mf/Whrb9bOZQegurq6LCKyurq6Zp+/5JJLsohoNC1fvjx74YUXstNOOy3r3Llz1r179+yiiy7K1qxZk1/uZz/7WTZw4MCsQ4cO2aGHHpqdeuqp2caNG7Prrruuyfoee+yxZv/21772taxv376F2G0AANiu1nwP/OCDD2ZFRUXZpk2b9tDe/sPO2uCfufLUjFtuuSVGjhwZVVVVUVNTEzU1NdG+ffs4+eST4wMf+EAsWrQoZs2aFatWrYrx48dHRERNTU2cf/75cemll8ZLL70Uc+fOjXPOOSeyLIurrroqxo8fH+PGjcuvb9SoUc3+7bq6ujj00EP35O4CAECrvQf+y1/+Evfee2+MGjUq2rdvv6d3u0XatfYG7I1yuVwUFxdHp06dory8PCIirr322hgyZEjceOON+XF333139OrVK37/+9/Hxo0b46233opzzjknevfuHRERgwYNyo/t2LFjNDQ05NfXnJdffjluvfXWuPnmmwu0ZwAA0Lw9/R746quvjttuuy3++te/xogRI+L//b//V+A9fPdceUq0ePHieOyxx+Kggw7KT/3794+IbdFz3HHHxamnnhqDBg2Kc889N+68885Yt25d8vpfe+21GDduXJx77rnxsY99rFC7AQAAyQr5Hvg///M/o7q6OmbPnh1t27aNiy++OLIsK+TuvGuuPCXaunVrnHnmmXHTTTc1ea5Hjx7Rtm3bmDNnTsybNy9mz54dt956a3zxi1+MhQsXRt++fXe47tdeey1OOeWUGDlyZNxxxx2F2gUAAGiRQr4H7tq1a3Tt2jWOPvroOOaYY6JXr16xYMGCGDlyZKF2511z5Wk7iouLY8uWLfnHQ4YMiRdeeCH69OkT73vf+xpNnTt3joiIoqKiOOGEE2LKlClRXV0dxcXFMXPmzGbX97ZXX301Ro8eHUOGDIkf/OAH0aaN/5cAANA69tR74Hd6+4pTQ0NDAfZq9/FOfTv69OkTCxcujFdeeSXWrl0bn/zkJ+Mvf/lLnH/++fH000/HH//4x5g9e3ZceumlsWXLlli4cGHceOONsWjRolixYkU88MADsWbNmjjmmGPy63vuuedi6dKlsXbt2ti8eXO89tprMXr06OjVq1d8/etfjzVr1kRtbW3U1ta28t4DAHAg2hPvgZ9++um47bbbYsmSJfGnP/0pHnvssbjgggviyCOP3KuvOkWIp+266qqrom3btjFg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AAAkEE97gZKSkrjuuuuipKSktTdlv+T4FpbjW1iOb2E5voXl+BaW41tYjm9h7avH94C8YQQAAEBLufIEAACQQDwBAAAkEE8AAAAJxBMAAEAC8QQAAJBAPO0BX/nKV2LUqFHRqVOnOPjgg5OWybIsrr/++ujZs2d07NgxRo8eHS+88EKjMQ0NDfHpT386unbtGp07d46zzjor/vznPxdgD/Zu69ati8rKysjlcpHL5aKysjLWr1+/w2WKioqanf7rv/4rP2b06NFNnj/vvPMKvDd7n105vhMnTmxy7EaMGNFojPN3m5Ye382bN8fVV18dgwYNis6dO0fPnj3j4osvjtdee63RuAP1/L399tujb9++0aFDhxg6dGg8+eSTOxz/+OOPx9ChQ6NDhw7x3ve+N773ve81GTNjxowYMGBAlJSUxIABA2LmzJmF2vy9XkuO7wMPPBAf/vCHo1u3blFaWhojR46M//3f/200Ztq0ac2+Fr/55puF3pW9UkuO79y5c5s9dr/73e8ajXP+/kNLjm9z/x4rKiqKY489Nj/G+fsPTzzxRJx55pnRs2fPKCoqiv/+7//e6TL77OtvRsFde+212Te+8Y3syiuvzHK5XNIyX/3qV7MuXbpkM2bMyH77299mEyZMyHr06JHV19fnx1x++eXZe97znmzOnDnZM888k51yyinZcccdl7311lsF2pO907hx47KBAwdm8+bNy+bNm5cNHDgwO+OMM3a4TE1NTaPp7rvvzoqKirKXX345P+bkk0/OqqqqGo1bv359oXdnr7Mrx/eSSy7Jxo0b1+jYvf76643GOH+3aenxXb9+fTZmzJhs+vTp2e9+97ts/vz52fDhw7OhQ4c2Gncgnr/3339/1r59++zOO+/MXnzxxeyKK67IOnfunP3pT39qdvwf//jHrFOnTtkVV1yRvfjii9mdd96ZtW/fPvv5z3+eHzNv3rysbdu22Y033pi99NJL2Y033pi1a9cuW7BgwZ7arb1GS4/vFVdckd10003Z008/nf3+97/PJk+enLVv3z575pln8mN+8IMfZKWlpU1ekw9ELT2+jz32WBYR2dKlSxsdu39+DXX+/kNLj+/69esbHdeVK1dmhx56aHbdddflxzh//+Hhhx/OvvjFL2YzZszIIiKbOXPmDsfvy6+/4mkP+sEPfpAUT1u3bs3Ky8uzr371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1dVlnTp1yr773e82Wecf/vCHbMqUKdlvfvObbPny5dlDDz2U9e/fPxs8eLDju5Pju2HDhuxzn/tcNm/evGz58uXZY489lo0cOTJ7z3ve4/xtRkuP7+bNm7OzzjorO/zww7MlS5Y0uj1uQ0NDlmUH7vn79q2I77rrruzFF1/MJk2alHXu3Dl/d6xrrrkmq6yszI9/+1a5n/3sZ7MXX3wxu+uuu5rcKvepp57K2rZtm331q1/NXnrppeyrX/3qXnGr3NbQ0uP7k5/8JGvXrl32ne98Z7u3zL/++uuzWbNmZS+//HJWXV2d/fu//3vWrl27bOHChXt8/1pbS4/vN7/5zWzmzJnZ73//++z555/PrrnmmiwishkzZuTHOH//oaXH920XXXRRNnz48GbX6fz9hw0bNuTf30ZE9o1vfCOrrq7O3wV2f3r9FU97wCWXXJJFRJPpsccey4+JiOwHP/hB/vHWrVuz6667LisvL89KSkqyk046Kfvtb3/baL1/+9vfsk996lPZoYcemnXs2DE744wzshUrVuyhvdp7vP7669mFF16YdenSJevSpUt24YUXNrl16zuPb5Zl2fe///2sY8eOzf72zYoVK7KTTjopO/TQQ7Pi4uLsyCOPzD7zmc80+a2iA0FLj+9f//rXrKKiIuvWrVvWvn377IgjjsguueSSJuem83eblh7f5cuXN/t68s+vKQfy+fud73wn6927d1ZcXJwNGTIke/zxx/PPXXLJJdnJJ5/caPzcuXOzwYMHZ8XFxVmfPn2a/Y8pP/vZz7J+/fpl7du3z/r379/ozemBpiXH9+STT272PL3kkkvyYyZNmpQdccQRWXFxcdatW7esoqIimzdv3h7co71LS47vTTfdlB155JFZhw4dskMOOST7P//n/2QPPfRQk3U6f/+hpa8P69evzzp27Jjdcccdza7P+fsPb986f3v/e9+fXn+Lsuzv384CAABgu3znCQAAIIF4AgAASCCeAAAAEognAACABOIJAAAggXgCAABIIJ4AAAASiCcAAIAE4gkAACCBeAIAAEggngAAABL8/74i7eIxYz9yAAAAAElFTkSuQmCC",
+      "text/plain": [
+       "<Figure size 1000x1000 with 1 Axes>"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "--------------------------------------------------------------------------------\n"
+     ]
+    }
+   ],
+   "source": [
+    "# ---------------------\n",
+    "# Run this sanity check\n",
+    "# Note that this is not an exhaustive check for correctness.\n",
+    "# The plot produced should look like the \"test solution plot\" depicted below. \n",
+    "# ---------------------\n",
+    "\n",
+    "print (\"-\" * 80)\n",
+    "print (\"Outputted Plot:\")\n",
+    "\n",
+    "M_reduced_plot_test = np.array([[1, 1], [-1, -1], [1, -1], [-1, 1], [0, 0]])\n",
+    "word2ind_plot_test = {'test1': 0, 'test2': 1, 'test3': 2, 'test4': 3, 'test5': 4}\n",
+    "words = ['test1', 'test2', 'test3', 'test4', 'test5']\n",
+    "plot_embeddings(M_reduced_plot_test, word2ind_plot_test, words)\n",
+    "\n",
+    "print (\"-\" * 80)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "YpBzYs2hSSuC"
+   },
+   "source": [
+    "### Question 1.5: Co-Occurrence Plot Analysis [written] \n",
+    "\n",
+    "Now we will put together all the parts you have written! We will compute the co-occurrence matrix with fixed window of 4 (the default window size), over the Reuters \"gold\" corpus. Then we will use TruncatedSVD to compute 2-dimensional embeddings of each word. TruncatedSVD returns U\\*S, so we need to normalize the returned vectors, so that all the vectors will appear around the unit circle (therefore closeness is directional closeness). **Note**: The line of code below that does the normalizing uses the NumPy concept of *broadcasting*. If you don't know about broadcasting, check out\n",
+    "[Computation on Arrays: Broadcasting by Jake VanderPlas](https://jakevdp.github.io/PythonDataScienceHandbook/02.05-computation-on-arrays-broadcasting.html).\n",
+    "\n",
+    "Run the below cell to produce the plot. It'll probably take a few seconds to run."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:31:54.611054Z",
+     "start_time": "2025-04-26T17:31:53.683096Z"
+    },
+    "id": "7L1Uk50mSSuD"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Running Truncated SVD over 2830 words...\n",
+      "Done.\n"
+     ]
+    },
+    {
+     "data": {
+      "image/png": "iVBORw0KGgoAAAANSUhEUgAAA08AAAMtCAYAAABHAkpLAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjEwLjAsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvlHJYcgAAAAlwSFlzAAAPYQAAD2EBqD+naQAAZ3RJREFUeJzt3XlYVdXi//HPYZCZo4LgECHOEDhhKlpJac5mw3UkUjPLypS83cyrppZpdnNqsMFSrBzyZva1MofKKcdAacLUcKwwtBQcEhT27w+u5+eRwY1yPAjv1/Oc57LXWXvttdjUPZ/WOmtbDMMwBAAAAAAolouzOwAAAAAA1wPCEwAAAACYQHgCAAAAABMITwAAAABgAuEJAAAAAEwgPAEAAACACYQnAAAAADDBzdkdcIa8vDz9/vvv8vPzk8VicXZ3AAAAADiJYRg6efKkatasKReX4ueWKmR4+v333xUSEuLsbgAAAAAoIw4fPqwbbrih2DoVMjz5+flJyv8F+fv7O7k3AAAAAJwlKytLISEhtoxQnAoZni4s1fP39yc8AQAAADD1dR42jAAAAAAAEwhPAAAAAGAC4QkAAAAATCA8AQAAAIAJhCcAAAAAMIHwBAAAAAAmEJ4AAAAAwATCEwAAAACYQHgCAAAAABMITwAAAABgAuEJAAAAAEwgPAEAAACACYQnAAAAADCB8AQAAAAAJhCeAAAAAMAEwhMAAAAAmEB4AgAAAAATCE8AAAAAYALhqQzLzc1VXl6es7sBAAAAQBUoPOXl5Wnq1KmqV6+eqlWrJkn6z3/+I0n64YcfdMcdd8jLy0sBAQF6+OGHderUKdu5AwcO1N13362JEycqKChI/v7+euSRR5STk2OrExsbq2HDhmnYsGGqXLmyAgICNHbsWBmGYauTk5Ojp59+WrVq1ZKPj49atWqldevW2d5PTExU5cqV9dlnnykiIkIeHh46ePCgg38zAAAAAMyoMOFp9OjRmjp1qsaNG6dt27ZJkoKCgnTmzBl17txZVapU0bfffqv//ve/+vLLLzVs2DC787/66ivt2rVLa9eu1aJFi7Rs2TJNnDjRrs78+fPl5uambdu26ZVXXtGMGTP0zjvv2N4fNGiQNm3apMWLF+v7779Xr1691LlzZ+3du9dW58yZM5oyZYreeecd/fTTTwoKCnLgbwUAAACAWRbj4qmRcurkyZOqVq2aXnvtNT300EPKysqS1WpVZmamPvzwQ40aNUqHDx+Wj4+PJGnFihXq0aOHfv/9dwUHB2vgwIH69NNPdfjwYXl7e0uS3nzzTf3rX/9SZmamXFxcFBsbq4yMDP3000+yWCySpGeeeUbLly9Xamqq0tLSVL9+ff3666+qWbOmrW8dOnRQy5YtNXnyZCUmJmrQoEFKSUlRkyZNrv0vCgAAAKhgLs4G/v7+xdatEDNPu3btUnZ2ttq3b1/oe02aNLEFJ0lq27at8vLytHv3bltZkyZNbMFJkmJiYnTq1CkdPnzYVta6dWtbcLpQZ+/evcrNzdWOHTtkGIYaNGggX19f22v9+vVKS0uznVOpUiU1bty41MYOAAAAoHS4ObsD14KXl1eR7xmGYRd4LlZUeUnrSPnfuXJ1dVVycrJcXV3t3vP19bXrq9k2AQAAAFw7FWLmqX79+vLy8tJXX31V4L2IiAilpKTo9OnTtrJNmzbJxcVFDRo0sJV99913+vvvv23HW7dula+vr2644Qa7sott3bpV9evXl6urq5o1a6bc3FxlZGSoXr16dq/q1auX5nABAAAAOECFCE+enp4aNWqUnn76ab333nvat2+fJOm9995TXFycPD09NWDAAP34449au3atnnjiCcXHxys4ONjWRk5OjgYPHqzU1FR98cUXGj9+vIYNGyYXl/xf4datW7Vv3z6NHDlSu3fv1qJFi/Tqq69qxIgRkqQGDRooLi5ODzzwgD7++GPt379f3377raZOnaoVK1bYrpOVlaWZM2deu18OAAAAAFMqxLI9SRo3bpzc3Nz07LPP6vfff5ckHT16VN7e3lq1apVGjBihm2++Wd7e3rrvvvs0ffp0u/Pbt2+v+vXr67bbblN2drb69u2rCRMm2NVp0aKF/v77b7Vs2VKurq564okn9PDDD9venzdvniZNmqR//vOfOnz4sPLy8nT33Xera9eutjp+fn525wAAAAAoGyrEbnuXKsmOGlL+c55OnDihTz75pMg6np6eatWqldavX2+qD4mJiUpISNDxv44re3+m8k7myMWvkjzCrLK48J0nAAAA4Fpgtz0H+Oabby77ENyLTZ8+XVFRUfLx8VFISIgee+wx24N3161bp0GDBuVvc+7qIq96VTR22Cgdm/ODbgyoqf+MmmRrx2Kx6J133tE999wjb29v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ZYv69Omj+Ph4fffdd4qPj1fv3r21bds2Rw4FAAAAgKTY2FglJCQ4uxtOYTEMw3BU461atVLz5s31xhtv2MrCw8N19913a8qUKQXqjxo1SsuXL9euXbtsZUOHDtV3332nLVu2SJL69OmjrKwsffHFF7Y6nTt3VpUqVbRo0SJT/crKypLValVmZqb8/f2vdHgAAABAhRMbG6umTZtq5syZJTpv4MCBOnHihD755BOH9OtKlSQbOGzmKScnR8nJyerYsaNdeceOHbV58+ZCz9myZUuB+p06dVJSUpLOnTtXbJ2i2pSk7OxsZWVl2b0AAACA8i42NlZPPPGEEhISVKVKFQUHB+vtt9/W6dOnNWjQIPn5+alu3bp2ExOpqanq2rWrfH19FRwcrPj4eB07dkxSfgBav369Zs2aJYvFIovFogMHDig3N1eDBw9WWFiYvLy81LBhQ82aNavYvn300UeKioqSl5eXAgIC1KFDB50+fdqhv4+r5bDwdOzYMeXm5io4ONiuPDg4WEeOHCn0nCNHjhRa//z587YbVlSdotqUpClTpshqtdpeISEhVzIkAAAA4Lozf/58BQYGavv27XriiSf06KOPqlevXmrTpo127NihTp06KT4+XmfOnFF6erratWunpk2bKikpSStXrtQff/yh3r17S5JmzZqlmJgYDRkyROnp6UpPT1dISIjy8vJ0ww03aMmSJUpNTdWzzz6rf//731qyZEmhfUpPT1e/fv304IMPateuXVq3bp3uvfdeOXBRXKlwc/QFLBaL3bFhGAXKLlf/0vKStjl69GiNHDnSdpyVlUWAAgAAQIXQpEkTjR07VlL+5+IXX3xRgYGBGjJkiCTp2Wef1RtvvKHvv/9eK1asUPPmzTV58mTb+XPnzlVISIj27NmjBg0aqFKlSvL29lb16tVtdVxdXTVx4kTbcVhYmDZv3qwlS5bYgtfF0tPTdf78ed17770KDQ2VJEVFRTlk/KXJYeEpMDBQrq6uBWaEMjIyCswcXVC9evVC67u5uSkgIKDYOkW1KUkeHh7y8PC4kmEAAAAA17XGjRvbfnZ1dVVAQIBdULnwOTojI0PJyclau3atfH19C7STlpamBg0aFHmdN998U++8844OHjyov//+Wzk5OWratGmhdZs0aaL27dsrKipKnTp1UseOHfWPf/xDVapUucJRXhsOW7ZXqVIlRUdHa82aNXbla9asUZs2bQo9JyYmpkD91atXq0WLFnJ3dy+2TlFtAgAAABXZhc/RF1gsFruyCyu48vLylJeXpx49eiglJcXutXfvXt12221FXmPJkiV68skn9eCDD2r16tVKSUnRoEGDlJOTU2h9V1dXrVmzRl988YUiIiL06quvqmHDhtq/f38pjNhxHLpsb+TIkYqPj1eLFi0UExOjt99+W4cOHdLQoUMl5U8b/vbbb3rvvfck5e+s99prr2nkyJEaMmSItmzZonfffdduF70RI0botttu09SpU9WzZ0/93//9n7788kt98803jhwKAAAAUO41b95cS5cuVe3ateXmVnhUqFSpknJzc+3KNm7cqDZt2uixxx6zlaWlpRV7LYvForZt26pt27Z69tlnFRoaqmXLltl93aascehznvr06aOZM2fqueeeU9OmTbVhwwatWLHCtq4xPT3d7plPYWFhWrFihdatW6emTZvq+eef1yuvvKL77rvPVqdNmzZavHix5s2bp8aNGysxMVEffvihWrVq5cihAAAAAOXe448/rr/++kv9+vXT9u3btW/fPq1evVoPPvigLTDVrl1b27Zt04EDB3Ts2DHl5eWpXr16SkpK0qpVq7Rnzx6NGzdO3377bZHX2bZtmyZPnqykpCQdOnRIH3/8sY4eParw8PBrNdQr4vANIx577DG7BHqxxMTEAmXt2rXTjh07im3zH//4h/7xj3+URvcAAAAA/E/NmjW1adMmjRo1Sp06dVJ2drZCQ0PVuXNnubjkz7s89dRTGjBggCIiIvT3339r//79Gjp0qFJSUtSnTx9ZLBb169dPjz32mN0W6Bfz9/fXhg0bNHPmTGVlZSk0NFTTpk1Tly5druVwS8yhD8ktq3hILgAAAOAceXm5+m3XTzp14rh8K1dRrfCb5OLi6rT+lCQbOHzmCQAAAAAkae+2zfo68W2d+uuYrcy3aqDuGPiw6rcq+xvAOfQ7TwAAAAAg5Qen5dMn2wUnSTr11zEtnz5Ze7dtdlLPzCM8AQAAAHCovLxcfZ34drF11s5/W3l5ucXWcTbCEwAAAACH+m3XTwVmnC518s9j+m3XT9eoR1eG8AQAAADAoU6dOF6q9ZyF8AQAAADAoXwrVynVes5CeAIAAADgULXCb5Jv1cBi6/gFBKpW+E3XqEdXhvAEAAAAwKFc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AAAAEwhPAAAAAGAC4QkAgHKodu3amjlzprO7AQDlCuEJAAAAAEwgPAEAAACACYQnAADKmLfeeku1atVSXl6eXfldd92lAQMGKC0tTT179lRwcLB8fX11880368svvyyyvQMHDshisSglJcVWduLECVksFq1bt85Wlpqaqq5du8rX11fBwcGKj4/XsWPHSnt4AHDdIjwBAFDG9OrVS8eOHdPatWttZcePH9eqVasUFxenU6dOqWvXrvryyy+1c+dOderUST169NChQ4eu+Jrp6elq166dmjZtqqSkJK1cuVJ//PGHevfuXRpDAoBywc3ZHQAAAPaqVq2qzp07a+HChWrfvr0k6b///a+qVq2q9u3by9XVVU2aNLHVnzRpkpYtW6bly5dr2LBhV3TNN954Q82bN9fkyZNtZXPnzlVISIj27NmjBg0aXN2gAKAcYOYJAIAyKC4uTkuXLlV2drYkacGCBerbt69cXV11+vRpPf3004qIiFDlypXl6+urn3/++apmnpKTk7V27Vr5+vraXo0aNZIkpaWllcqYAOB6x8wTAABlUI8ePZSXl6fPP/9cN998szZu3Kjp06dLkv71r39p1apVevnll1WvXj15eXnpH//4h3Jycgpty8Ul/7+VGoZhKzt37pxdnby8PPXo0UNTp04tcH6NGjVKa1gAcF0jPAEAUAZ5eXnp3nvv1YIFC/TLL7+oQYMGio6OliRt3LhRAwcO1D333CNJOnXqlA4cOFBkW9WqVZOU/72mZs2aSZLd5hGS1Lx5cy1dulS1a9eWmxsfDwCgMCzbAwCgjIqLi9Pnn3+uuXPn6v7777eV16tXTx9//LFSUlL03XffqX///gV25ruYl5eXWrdurRdffFGpqanasGGDxo4da1fn8ccf119//aV+/fpp+/bt2rdvn1avXq0HH3xQubm5DhsjAFxPCE8AAJRRd9xxh6pWrardu3erf//+tvIZM2aoSpUqatOmjXr06KFOnTqpefPmxbY1d+5cnTt3Ti1atNCIESM0adIku/dr1qypTZs2KTc3V506dVJkZKRGjBghq9VqW/YHABWdxbh4AXQFkZWVJavVqszMTPn7+zu7OwAAOF1unqHt+/9SxsmzCvLzVMuwqnJ1sTi7WwDgcCXJBixqBgCgglv5Y7omfpqq9MyztrIaVk+N7xGhzpFsFgEAFzAPDwBA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",
+      "text/plain": [
+       "<Figure size 1000x1000 with 1 Axes>"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "# -----------------------------\n",
+    "# Run This Cell to Produce Your Plot\n",
+    "# ------------------------------\n",
+    "reuters_corpus = read_corpus()\n",
+    "M_co_occurrence, word2ind_co_occurrence = compute_co_occurrence_matrix(reuters_corpus)\n",
+    "M_reduced_co_occurrence = reduce_to_k_dim(M_co_occurrence, k=2)\n",
+    "\n",
+    "# Rescale (normalize) the rows to make them each of unit-length\n",
+    "M_lengths = np.linalg.norm(M_reduced_co_occurrence, axis=1)\n",
+    "M_normalized = M_reduced_co_occurrence / M_lengths[:, np.newaxis] # broadcasting\n",
+    "\n",
+    "words = ['value', 'gold', 'platinum', 'reserves', 'silver', 'metals', 'copper', 'belgium', 'australia', 'china', 'grammes', \"mine\"]\n",
+    "\n",
+    "plot_embeddings(M_normalized, word2ind_co_occurrence, words)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "RtOd40JTSSuE"
+   },
+   "source": [
+    "**Verify that your figure matches \"question_1.5.png\" in the assignment zip. If not, use that figure to answer the next two questions.**"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "ciXWGMvRSSuE"
+   },
+   "source": [
+    "a. Find at least two groups of words that cluster together in 2-dimensional embedding space. Give an explanation for each cluster you observe."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "fLU7o3HESSuF"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "Groups of words that cluster together in 2-dimensional embedding space:\n",
+    "1. The group of 'copper', 'platinum' & 'silver' which are all types of metals cluster together. However, silver appears slightly farther from copper and platinum, which makes sense given the broader semantic silver might have compared to the other two.\n",
+    "2. The group of 'belgium' & 'australia' form a tight cluster, which aligns with their semantic similarity as country names.\n",
+    "\n",
+    "### SOLUTION END\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "3H-tyA9RSSuF"
+   },
+   "source": [
+    "b. What doesn't cluster together that you might think should have? Describe at least two examples."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "3NG2j9J4SSuG"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "\n",
+    "1. I would expect that 'metals' and 'gold' will also cluster with the group of  'copper', 'platinum' & 'silver', due to their semantic relations.\n",
+    "2. I would expect that also 'china' will be in the cluster of 'belgium' & 'australia' as a country name as well.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "_h0OzAaRSSuI"
+   },
+   "source": [
+    "## Part 2: Prediction-Based Word Vectors \n",
+    "\n",
+    "As discussed in class, more recently prediction-based word vectors have demonstrated better performance, such as word2vec and GloVe (which also utilizes the benefit of counts). Here, we shall explore the embeddings produced by GloVe. Please revisit the class notes and lecture slides for more details on the word2vec and GloVe algorithms. If you're feeling adventurous, challenge yourself and try reading [GloVe's original paper](https://nlp.stanford.edu/pubs/glove.pdf).\n",
+    "\n",
+    "Then run the following cells to load the GloVe vectors into memory. **Note**: If this is your first time to run these cells, i.e. download the embedding model, it will take a couple minutes to run. If you've run these cells before, rerunning them will load the model without redownloading it, which will take about 1 to 2 minutes."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:32:05.338767Z",
+     "start_time": "2025-04-26T17:32:05.335060Z"
+    },
+    "id": "l3kwvdksSSuI"
+   },
+   "outputs": [],
+   "source": [
+    "def load_embedding_model():\n",
+    "    \"\"\" Load GloVe Vectors\n",
+    "        Return:\n",
+    "            wv_from_bin: All 400000 embeddings, each lengh 200\n",
+    "    \"\"\"\n",
+    "    import gensim.downloader as api\n",
+    "    wv_from_bin = api.load(\"glove-wiki-gigaword-200\")\n",
+    "    print(\"Loaded vocab size %i\" % len(list(wv_from_bin.index_to_key)))\n",
+    "    return wv_from_bin"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:33:00.267737Z",
+     "start_time": "2025-04-26T17:32:05.979765Z"
+    },
+    "id": "JCvVlSLZSSuJ",
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Loaded vocab size 400000\n"
+     ]
+    }
+   ],
+   "source": [
+    "# -----------------------------------\n",
+    "# Run Cell to Load Word Vectors\n",
+    "# Note: This will take a couple minutes\n",
+    "# -----------------------------------\n",
+    "wv_from_bin = load_embedding_model()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "egIeG1RTSSuK"
+   },
+   "source": [
+    "#### Note: If you are receiving a \"reset by peer\" error, rerun the cell to restart the download. If you run into an \"attribute\" error, you may need to update to the most recent version of gensim and numpy. You can upgrade them inline by uncommenting and running the below cell:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-23T18:50:12.903981Z",
+     "start_time": "2025-04-23T18:50:12.900056Z"
+    },
+    "id": "ZlF5fxSXcq95"
+   },
+   "outputs": [],
+   "source": [
+    "#!pip install gensim --upgrade\n",
+    "#!pip install numpy --upgrade"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "rH9gWJWpSSuL"
+   },
+   "source": [
+    "### Reducing dimensionality of Word Embeddings\n",
+    "Let's directly compare the GloVe embeddings to those of the co-occurrence matrix. In order to avoid running out of memory, we will work with a sample of 10000 GloVe vectors instead.\n",
+    "Run the following cells to:\n",
+    "\n",
+    "1. Put 10000 Glove vectors into a matrix M\n",
+    "2. Run `reduce_to_k_dim` (your Truncated SVD function) to reduce the vectors from 200-dimensional to 2-dimensional."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:33:04.620077Z",
+     "start_time": "2025-04-26T17:33:04.613443Z"
+    },
+    "id": "0PROUu_-SSuL"
+   },
+   "outputs": [],
+   "source": [
+    "def get_matrix_of_vectors(wv_from_bin, required_words):\n",
+    "    \"\"\" Put the GloVe vectors into a matrix M.\n",
+    "        Param:\n",
+    "            wv_from_bin: KeyedVectors object; the 400000 GloVe vectors loaded from file\n",
+    "        Return:\n",
+    "            M: numpy matrix shape (num words, 200) containing the vectors\n",
+    "            word2ind: dictionary mapping each word to its row number in M\n",
+    "    \"\"\"\n",
+    "    import random\n",
+    "    words = list(wv_from_bin.index_to_key)\n",
+    "    print(\"Shuffling words ...\")\n",
+    "    random.seed(225)\n",
+    "    random.shuffle(words)\n",
+    "    words = words[:10000]\n",
+    "    print(\"Putting %i words into word2ind and matrix M...\" % len(words))\n",
+    "    word2ind = {}\n",
+    "    M = []\n",
+    "    curInd = 0\n",
+    "    for w in words:\n",
+    "        try:\n",
+    "            M.append(wv_from_bin.get_vector(w))\n",
+    "            word2ind[w] = curInd\n",
+    "            curInd += 1\n",
+    "        except KeyError:\n",
+    "            continue\n",
+    "    for w in required_words:\n",
+    "        if w in words:\n",
+    "            continue\n",
+    "        try:\n",
+    "            M.append(wv_from_bin.get_vector(w))\n",
+    "            word2ind[w] = curInd\n",
+    "            curInd += 1\n",
+    "        except KeyError:\n",
+    "            continue\n",
+    "    M = np.stack(M)\n",
+    "    print(\"Done.\")\n",
+    "    return M, word2ind"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 17,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:33:07.018855Z",
+     "start_time": "2025-04-26T17:33:06.523294Z"
+    },
+    "id": "cpgM0M-hSSuM"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Shuffling words ...\n",
+      "Putting 10000 words into word2ind and matrix M...\n",
+      "Done.\n",
+      "Running Truncated SVD over 10012 words...\n",
+      "Done.\n"
+     ]
+    }
+   ],
+   "source": [
+    "# -----------------------------------------------------------------\n",
+    "# Run Cell to Reduce 200-Dimensional Word Embeddings to k Dimensions\n",
+    "# Note: This should be quick to run\n",
+    "# -----------------------------------------------------------------\n",
+    "M, word2ind = get_matrix_of_vectors(wv_from_bin, words)\n",
+    "M_reduced = reduce_to_k_dim(M, k=2)\n",
+    "\n",
+    "# Rescale (normalize) the rows to make them each of unit-length\n",
+    "M_lengths = np.linalg.norm(M_reduced, axis=1)\n",
+    "M_reduced_normalized = M_reduced / M_lengths[:, np.newaxis] # broadcasting"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "8_46FYMJSSuN"
+   },
+   "source": [
+    "**Note: If you are receiving out of memory issues on your local machine, try closing other applications to free more memory on your device. You may want to try restarting your machine so that you can free up extra memory. Then immediately run the jupyter notebook and see if you can load the word vectors properly. If you still have problems with loading the embeddings onto your local machine after this, please go to office hours or contact course staff.**"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "zAFrU8ahSSuO"
+   },
+   "source": [
+    "### Question 2.1: GloVe Plot Analysis [written]\n",
+    "\n",
+    "Run the cell below to plot the 2D GloVe embeddings for `['value', 'gold', 'platinum', 'reserves', 'silver', 'metals', 'copper', 'belgium', 'australia', 'china', 'grammes', \"mine\"]`."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:33:11.106193Z",
+     "start_time": "2025-04-26T17:33:10.811154Z"
+    },
+    "id": "9kHRkjz6SSuO",
+    "scrolled": true
+   },
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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/7uGDRsmSWrZsqVuvPFGHTp0SJL03HPP6Y477pAkTZw4Uddff7327dunyMjIUtssLi7WvHnz5OfnJ0lKTEzUN998Yx+Fuu+++xzqz549W0FBQUpPT1d0dLQzTtOpGDECAAAArnIZGRkqLCxU7969y6zTrl07+88hISGSpNzc3DLrh4eH20PRpX1+XX///v0aPHiwrrvuOvn7+6tFixaSpCNHjlT5PFyJESMAAADgKleRhRPq1atn/9lisUhSudPefl3/0j6/rj9gwACFhoZq1qxZatasmYqLixUdHa1z585Vtvu1AiNGAAAAwFWudevWql+/vr755psaOd6JEyeUkZGhF198Ub1791bbtm118uTJGjm2szBiBAAAAFzlvL29NWbMGD3//PPy9PRUjx49dOzYMX3//fflTq+rqoYNG6px48Z6//33FRISoiNHjmjs2LHVfpyaRDACAAAA6oDx48fLw8NDL730kn766SeFhIToiSeecMqx3Nzc9PHHH+uZZ55RdHS0IiIi9Pbbb6tXr15OOV5NsBiGYbi6E9UpPz9fVqtVNptN/v7+ru4OAAAAUOcUGYZS804p99wFBXl6KDbAV+7/u2+pNqlMNmDECAAAAECFLT2Wpxf3/qjswvP2shCveprUurnuaBLguo5dIRZfAAAAAFAhS4/l6dFdhxxCkSTlFJ7Xo7sOaemxPNd0rBoQjAAAAABcVpFh6MW9P6q0+3AulY3f+6OKrtI7dQhGAAAAAC4rNe9UiZGiXzMk/VR4Xql5p2quU9WIYAQAAADgsnLPXajWerUNwQgAAADAZQV5VmzdtorWq20IRgAAAAAuKzbAVyFe9VTWotwWSc286ik2wLcmu1VtCEYAAAAALsvdYtGk1s0lqUQ4uvT+ldbNa+XzjCqCYAQAAACgQu5oEqAPosPV1KueQ3mIVz19EB1+VT/H6OqcAAgAAADAJe5oEqCEQKtS804p99wFBXl6KDbA96odKbqEYAQAAACgUtwtFvVo6OfqblQrptIBAAAAMD2CEQAAAADTIxgBAAAAMD2CEQAAAADTIxgBAAAAMD2CEQAAAFDDzp07V+PHPH/+fI0f82pCMAIAAACcrFevXkpKStLo0aMVGBio2267Tenp6erXr598fX0VHBysxMREHT9+3L7Pv/71L8XExKh+/fpq3Lix+vTpo9OnT9u3z507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YYKkklPpLBaLPvjgA91zzz1q0KCBWrdurS+//NK+vbSRpy+++EIWi8X+fsKECerQoYPmzJmja6+9Vr6+vnryySdVVFSkN954Q02bNlVQUJBeffXV6vmwgFIQjAAAAOqI+fPny8PDQxs3btTbb7+tadOm6YMPPii1rpubm95++23t2rVL8+fP17fffqvnn39ektS9e3dNnz5d/v7+ys7OVnZ2tp577rkyjztx4kQNHDhQO3bsUL9+/TRkyBD9/PPPler7/v379e9//1vJycn66KOPNGfOHN1xxx364YcftHbtWk2ZMkUvvviiUlNTK9UuUFFMpQMAAKgjQkNDNW3aNFksFkVERGjnzp2aNm2aRowYUaLuqFGj7D+3aNFCr7zyip588knNmDFDnp6eslqtslgsatq06WWPO3z4cD344IOSpNdee03vvPOONm3apISEhAr3vbi4WHPmzJGfn5+ioqJ0yy23KDMzU8uWLZObm5siIiI0ZcoUrVmzRrGxsRVuF6goRowAAADqiNjYWIcpanFxcdq7d6+KiopK1F29erVuu+02NW/eXH5+fho6dKhOnDih06dPV/q47dq1s//s4+MjPz8/5ebmVqqN8PBw+fn52d8HBwcrKipKbm5uDmWVbReoKIIRAACAyRw+fFj9+vVTdHS0Fi9erK1bt+rdd9+VJJ0/f77S7dWrV8/hvcViUXFxsaSLU/Z+e59TaccorY3y2gWq21U3le7cuXPy9PR0dTcAAABqnd/ef5OamqrWrVvL3d3doXzLli26cOGC3nzzTfuIzKeffupQx9PTs9SRpspq0qSJCgoKdPr0afn4+EiS0tLSrrhdoLq5fMSooKBAQ4YMkY+Pj0JCQjRt2jT16tXLPu81PDxckyZN0vDhw2W1Wu1zZMeMGaM2bdqoQYMGuu666zR+/HiH//owefLkKq1uYrFYNHPmTPXv318NGjRQ27ZtlZKSon379qlXr17y8fFRXFyc9u/f77DfV199pc6dO8vb21vXXXedJk6cqAsXLti3T5gwQddee628vLzUrFkzPfPMM076RAEAgFllZWVp9OjRyszM1EcffaR33nlHI0eOLFGvZcuWunDhgt555x0dOHBACxYs0HvvvedQJzw8XKdOndI333yj48eP68yZM1XqU7du3dSgQQP9+c9/1r59+7Ro0SLNmzevSm0BzuTy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1a1bN3tZbGysrFarNmzYUKE2jh49qqVLl+qRRx4psW3hwoUKDAzU9ddfr+eee04FBQXV1ve67Equy5o1axQUFKQ2bdpoxIgRys3NtW/bunWrzp8/r/j4eHtZs2bNFB0dXeHrbWbV8X2RJJvNJovFooCAAIdyvi8Vc+7cOW3dutXh/8eSFB8fX+Z1SElJKVG/b9++2rJli86fP19uHb4bFVOV6/JbxcXFKigoUKNGjRzKT506pbCwMF1zzTXq37+/tm/fXm39ruuu5Lp07NhRISEh6t27t1avXu2wje/LlamO78vs2bPVp08fhYWFOZTzfalZV/PvFw+XHr0WysnJUVBQUInyoKAg5eTkVKiN+fPny8/PT/fee69D+ZAhQ9SiRQs1bdpUu3bt0rhx4/Tf//5XK1eurJa+12VVvS6333677r//foWFhengwYMaP368br31Vm3dulVeXl7KycmRp6enGjZs6LBfcHBwha+3mVXH9+Xs2bMaO3asBg8eLH9/f3s535eKO378uIqKihQcHOxQXt7/j3Nyckqtf+HCBR0/flwhISFl1uG7UTFVuS6/9eabb+r06dMaOHCgvSwyMlLz5s1TTEyM8vPz9dZbb6lHjx7673//q9atW1frOdRFVbkuISEhev/999W5c2cVFhZqwYIF6t27t9asWaObb75ZUtnfKb4vFXOl35fs7Gz9+9//1qJFixzK+b7UvKv594tpgtGECRM0ceLEcuts3rxZ0sWFFH7LMIxSy0szZ84cDRkyRN7e3g7lI0aMsP8cHR2t1q1bq0uXLtq2bZs6depUobbrGmdflwceeMD+c3R0tLp06aKwsDAtXbq0RHCtTLt1XU19X86fP69BgwapuLhYM2bMcNjG96XyfvuZX+46lFb/t+WVbRMlVfUz/OijjzRhwgT9v//3/xz+A0RsbKzDIjI9evRQp06d9M477+jtt9+uvo7XcZW5LhEREYqIiLC/j4uLU1ZWlv72t7/Zg1Fl20TpqvoZzps3TwEBAbr77rsdyvm+uMbV+vvFNMEoKSnpsitahYeHa8eOHTp69GiJbceOHSuRbEuzbt06ZWZm6pNPPrls3U6dOqlevXrau3evaf/Qq6nrcklISIjCwsK0d+9eSVLTpk117tw5nTx50mHUKDc3V927d69wu3VNTVyX8+fPa+DAgTp48KC+/fZbh9Gi0vB9KVtgYKDc3d1L/Je23NzcMq9D06ZNS63v4eGhxo0bl1unMt85M6vKdbnkk08+0SOPPKLPPvtMffr0Kbeum5ubbrjhBvu/ayjflVyXX4uNjdWHH35of8/35cpcyXUxDENz5sxRYmKiPD09y63L98X5rubfL6a5xygwMFCRkZHlvry9vRUXFyebzaZNmzbZ9924caNsNluF/lCePXu2OnfurPbt21+27vfff6/z588rJCTkis7talZT1+WSEydOKCsry/6Zd+7cWfXq1XOYnpWdna1du3aZOhg5+7pcCkV79+7VqlWr7P9QlofvS9k8PT3VuXPnEtMMV65cWeZ1iIuLK1F/xYoV6tKli+rVq1duHTN/NyqjKtdFujhSNHz4cC1atEh33HHHZY9jGIbS0tL4blRQVa/Lb23fvt3hM+f7cmWu5LqsXbtW+/btK/Xe7t/i++J8V/Xvl5pf76H2S0hIMNq1a2ekpKQYKSkpRkxMTInlhyMiIozPP//cocxmsxkNGjQw/vGPf5Roc9++fcbEiRONzZs3GwcPHjSWLl1qREZGGh07dmRZ6Aqq7HUpKCgw/vjHPxobNmwwDh48aKxevdqIi4szmjdvbuTn59v3eeKJJ4xrrrnGWLVqlbFt2zbj1ltvZbnuSqjsdTl//rxx5513Gtdcc42RlpbmsHxqYWGhYRh8X6ri0jK3s2fPNtLT041Ro0YZPj4+9tWZxo4dayQmJtrrX1pO9dlnnzXS09ON2bNnl1hOdf369Ya7u7vx+uuvGxkZGcbrr79eK5ZTvZpU9rosWrTI8PDwMN59990yl6qfMGGCkZycbOzfv9/Yvn278dBDDxkeHh7Gxo0ba/z8rlaVvS7Tpk0zlixZYuzZs8fYtWuXMXbsWEOSsXjxYnsdvi9XrrLX5ZLf//73Rrdu3Uptk+/LlSsoKDC2b99ubN++3ZBkTJ061di+fbt9Jdm69PuFYFSKEydOGEOGDDH8/PwMPz8/Y8iQISWW6JRkzJ0716Fs5syZRv369Ut91sqRI0eMm2++2WjUqJHh6elptGzZ0njmmWdKPFMHZavsdTlz5owRHx9vNGnSxKhXr55x7bXXGsOGDTOOHDnisM8vv/xiJCUlGY0aNTLq169v9O/fv0QdlK2y1+XgwYOGpFJfq1evNgyD70tVvfvuu0ZYWJjh6elpdOrUyVi7dq1927Bhw4yePXs61F+zZo3RsWNHw9PT0wgPDy/1P+p89tlnRkREhFGvXj0jMjLS4Q9BVExlrkvPnj1L/W4MGzbMXmfUqFHGtddea3h6ehpNmjQx4uPjjQ0bNtTgGdUNlbkuU6ZMMVq2bGl4e3sbDRs2NG688UZj6dKlJdrk+3LlKvvvWF5enlG/fn3j/fffL7U9vi9X7tJy9WX9u1SXfr9YDON/d0MBAAAAgEmZ5h4jAAAAACgLwQgAAACA6RGMAAAAAJgewQgAAACA6RGMAAAAAJgewQgAAACA6RGMAAAAAJgewQgAAACA6RGMAAAAAJgewQgAAACA6RGMAAAAAJje/wegydAeCM70/AAAAABJRU5ErkJggg==",
+      "text/plain": [
+       "<Figure size 1000x1000 with 1 Axes>"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "words = ['value', 'gold', 'platinum', 'reserves', 'silver', 'metals', 'copper', 'belgium', 'australia', 'china', 'grammes', \"mine\"]\n",
+    "\n",
+    "plot_embeddings(M_reduced_normalized, word2ind, words)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "eOnrMZkzSSuP"
+   },
+   "source": [
+    "a. What is one way the plot is different from the one generated earlier from the co-occurrence matrix? What is one way it's similar?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "5KC4PTQoSSuQ"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "1. This GloVe plot different by clustering silver, metal, and gold together as expected given their strong semantic relationships.\n",
+    "2. This GloVe plot is similar to the previous one in that it clusters australia and belgium together, while china isn't cluster with them as might expect.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "bNDY5puZSSuQ"
+   },
+   "source": [
+    "b. What is a possible cause for the difference?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "o-cWAvi8SSuR"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "Since GloVe leverages global word co-occurrence statistics across the entire corpus, the differences between this plot and the previous one may reflect broader contextual similarities, rather than just local window-based associations.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "nA8oIbjjSSuS"
+   },
+   "source": [
+    "### Cosine Similarity\n",
+    "Now that we have word vectors, we need a way to quantify the similarity between individual words, according to these vectors. One such metric is cosine-similarity. We will be using this to find words that are \"close\" and \"far\" from one another.\n",
+    "\n",
+    "We can think of n-dimensional vectors as points in n-dimensional space. If we take this perspective [L1](http://mathworld.wolfram.com/L1-Norm.html) and [L2](http://mathworld.wolfram.com/L2-Norm.html) Distances help quantify the amount of space \"we must travel\" to get between these two points. Another approach is to examine the angle between two vectors. From trigonometry we know that:\n",
+    "\n",
+    "<img src=\"./imgs/inner_product.png\" width=20% style=\"float: center;\"></img>\n",
+    "\n",
+    "Instead of computing the actual angle, we can leave the similarity in terms of $similarity = cos(\\Theta)$. Formally the [Cosine Similarity](https://en.wikipedia.org/wiki/Cosine_similarity) $s$ between two vectors $p$ and $q$ is defined as:\n",
+    "\n",
+    "$$s = \\frac{p \\cdot q}{||p|| ||q||}, \\textrm{ where } s \\in [-1, 1] $$ "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "sFfCOLUsSSuS"
+   },
+   "source": [
+    "### Question 2.2: Words with Multiple Meanings [code + written] \n",
+    "Polysemes and homonyms are words that have more than one meaning (see this [wiki page](https://en.wikipedia.org/wiki/Polysemy) to learn more about the difference between polysemes and homonyms ). Find a word with *at least two different meanings* such that the top-10 most similar words (according to cosine similarity) contain related words from *both* meanings. For example, \"leaves\" has both \"go_away\" and \"a_structure_of_a_plant\" meaning in the top 10, and \"scoop\" has both \"handed_waffle_cone\" and \"lowdown\". You will probably need to try several polysemous or homonymic words before you find one. \n",
+    "\n",
+    "Please state the word you discover and the multiple meanings that occur in the top 10. Why do you think many of the polysemous or homonymic words you tried didn't work (i.e. the top-10 most similar words only contain **one** of the meanings of the words)?\n",
+    "\n",
+    "**Note**: You should use the `wv_from_bin.most_similar(word)` function to get the top 10 similar words. This function ranks all other words in the vocabulary with respect to their cosine similarity to the given word. For further assistance, please check the __[GenSim documentation](https://radimrehurek.com/gensim/models/keyedvectors.html#gensim.models.keyedvectors.FastTextKeyedVectors.most_similar)__."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:39:31.673522Z",
+     "start_time": "2025-04-26T17:39:31.646718Z"
+    },
+    "id": "ZAr09U-xSSuT"
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "[('bright', 0.6242774724960327),\n",
+       " ('dark', 0.6141002178192139),\n",
+       " ('lights', 0.6013951897621155),\n",
+       " ('lighter', 0.558175265789032),\n",
+       " ('heavy', 0.5408364534378052),\n",
+       " ('sunlight', 0.5362919569015503),\n",
+       " ('blue', 0.5349379777908325),\n",
+       " ('colored', 0.5282376408576965),\n",
+       " ('sky', 0.5239452719688416),\n",
+       " ('color', 0.513929009437561)]"
+      ]
+     },
+     "execution_count": 26,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "wv_from_bin.most_similar(\"light\")\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "VdQ018tjSSuT"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "The word I discovered is 'light,' whose meanings include both 'brightness' and 'low weight' and more. This polysemy is reflected in its top similar words, such as 'bright' (number 1) and 'heavy' (number 5).\n",
+    "\n",
+    "In my opinion, many other polysemous or homonymic words didn't work because one of their meanings presented much more in the data and therefore in the embedding while the other is underrepresentation.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "VfeW-eK9SSuU"
+   },
+   "source": [
+    "### Question 2.3: Synonyms & Antonyms [code + written] \n",
+    "\n",
+    "When considering Cosine Similarity, it's often more convenient to think of Cosine Distance, which is simply 1 - Cosine Similarity.\n",
+    "\n",
+    "Find three words $(w_1,w_2,w_3)$ where $w_1$ and $w_2$ are synonyms and $w_1$ and $w_3$ are antonyms, but Cosine Distance $(w_1,w_3) <$ Cosine Distance $(w_1,w_2)$. \n",
+    "\n",
+    "As an example, $w_1$=\"happy\" is closer to $w_3$=\"sad\" than to $w_2$=\"cheerful\". Please find a different example that satisfies the above. Once you have found your example, please give a possible explanation for why this counter-intuitive result may have happened.\n",
+    "\n",
+    "You should use the the `wv_from_bin.distance(w1, w2)` function here in order to compute the cosine distance between two words. Please see the __[GenSim documentation](https://radimrehurek.com/gensim/models/keyedvectors.html#gensim.models.keyedvectors.FastTextKeyedVectors.distance)__ for further assistance."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 25,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T17:38:16.880822Z",
+     "start_time": "2025-04-26T17:38:16.874879Z"
+    },
+    "id": "bwlpPjpHSSuV"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Synonyms light, illuminate have cosine distance: 0.554491400718689\n",
+      "Antonyms light, heavy have cosine distance: 0.4591635465621948\n"
+     ]
+    }
+   ],
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "\n",
+    "w1 = \"light\"\n",
+    "w2 = \"illuminate\"\n",
+    "w3 = \"heavy\"\n",
+    "\n",
+    "w1_w2_dist = wv_from_bin.distance(w1, w2)\n",
+    "w1_w3_dist = wv_from_bin.distance(w1, w3)\n",
+    "\n",
+    "print(\"Synonyms {}, {} have cosine distance: {}\".format(w1, w2, w1_w2_dist))\n",
+    "print(\"Antonyms {}, {} have cosine distance: {}\".format(w1, w3, w1_w3_dist))\n",
+    "\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "PeIHjTFMSSuV"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "A possible explanation for why this counter-intuitive result may have happened is that although synonyms share similar meanings, antonyms often co-occur in similar contexts and therefore share some semantic features that represented much more in the data than the synonyms.\n",
+    "In this case, light and heavy are both related to weight, and probably appear in the same context in the date more than light and illuminate.\n",
+    "\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "ZxIDq26zSSuW"
+   },
+   "source": [
+    "### Question 2.4: Analogies with Word Vectors [written] \n",
+    "Word vectors have been shown to *sometimes* exhibit the ability to solve analogies. \n",
+    "\n",
+    "As an example, for the analogy \"man : grandfather :: woman : x\" (read: man is to grandfather as woman is to x), what is x?\n",
+    "\n",
+    "In the cell below, we show you how to use word vectors to find x using the `most_similar` function from the __[GenSim documentation](https://radimrehurek.com/gensim/models/keyedvectors.html#gensim.models.keyedvectors.KeyedVectors.most_similar)__. The function finds words that are most similar to the words in the `positive` list and most dissimilar from the words in the `negative` list (while omitting the input words, which are often the most similar; see [this paper](https://www.aclweb.org/anthology/N18-2039.pdf)). The answer to the analogy will have the highest cosine similarity (largest returned numerical value)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 22,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-23T18:50:14.398225Z",
+     "start_time": "2025-04-23T18:50:14.367134Z"
+    },
+    "id": "u0pC7H4VSSuY"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[('grandmother', 0.7608445286750793),\n",
+      " ('granddaughter', 0.7200808525085449),\n",
+      " ('daughter', 0.7168302536010742),\n",
+      " ('mother', 0.7151536345481873),\n",
+      " ('niece', 0.7005682587623596),\n",
+      " ('father', 0.6659887433052063),\n",
+      " ('aunt', 0.6623408794403076),\n",
+      " ('grandson', 0.6618767976760864),\n",
+      " ('grandparents', 0.644661009311676),\n",
+      " ('wife', 0.6445354223251343)]\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Run this cell to answer the analogy -- man : grandfather :: woman : x\n",
+    "pprint.pprint(wv_from_bin.most_similar(positive=['woman', 'grandfather'], negative=['man']))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "XVv8I9WwSSuZ"
+   },
+   "source": [
+    "Let $m$, $g$, $w$, and $x$ denote the word vectors for `man`, `grandfather`, `woman`, and the answer, respectively. Using **only** vectors $m$, $g$, $w$, and the vector arithmetic operators $+$ and $-$ in your answer, to what expression are we maximizing $x$'s cosine similarity?\n",
+    "\n",
+    "Hint: Recall that word vectors are simply multi-dimensional vectors that represent a word. It might help to draw out a 2D example using arbitrary locations of each vector. Where would `man` and `woman` lie in the coordinate plane relative to `grandfather` and the answer?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "KlUKBqtHSSuZ"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "Using vector arithmetic, we can express relationship between `man` & `grandfather` as:\n",
+    "\n",
+    "g−m\n",
+    "\n",
+    "This represents the vector that, when added to \"man,\" results in \"grandfather.\"\n",
+    "\n",
+    "To find the analogous relationship for \"woman,\" we will need add this difference vector to \"woman\":\n",
+    "\n",
+    "w+(g−m)\n",
+    "\n",
+    "Therefore, we can express X as:\n",
+    "x = w + (g - m)\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "2rRgMca9SSua"
+   },
+   "source": [
+    "### Question 2.5: Finding Analogies [code + written]  \n",
+    "a. For the previous example, it's clear that \"grandmother\" completes the analogy. But give an intuitive explanation as to why the `most_similar` function gives us words like \"granddaughter\", \"daughter\", or \"mother?"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "WgYQXazQSSua"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "These following similar words probably occur in similar contexts which is why they are ranked highly.  This is likely due to the fact that these words share similar semantic features, such as being related to familial relationships.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "p9aAUXEISSub"
+   },
+   "source": [
+    "b. Find an example of analogy that holds according to these vectors (i.e. the intended word is ranked top). In your solution please state the full analogy in the form x:y :: a:b. If you believe the analogy is complicated, explain why the analogy holds in one or two sentences.\n",
+    "\n",
+    "**Note**: You may have to try many analogies to find one that works!"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 23,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-23T18:50:14.560111Z",
+     "start_time": "2025-04-23T18:50:14.528963Z"
+    },
+    "id": "dhzQJMYYVSjf"
+   },
+   "outputs": [],
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "\n",
+    "x = 'paris'\n",
+    "y = 'france'\n",
+    "a = 'berlin'\n",
+    "b = 'germany'\n",
+    "assert wv_from_bin.most_similar(positive=[a, y], negative=[x])[0][0] == b\n",
+    "\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "K3QlPqAwSSub"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "The full analogy is: \"paris : france :: berlin : germany\".\n",
+    "This analogy holds because Paris is the capital city of France, just as Berlin is the capital city of Germany. The vectors for these words are likely to be close to each other in the vector space due to their shared semantic relationship as capital cities and countries.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "SwgcEywwSSuc"
+   },
+   "source": [
+    "### Question 2.6: Incorrect Analogy [code + written] \n",
+    "a. Below, we expect to see the intended analogy \"hand : glove :: foot : **sock**\", but we see an unexpected result instead. Give a potential reason as to why this particular analogy turned out the way it did?"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 24,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-23T18:50:14.660762Z",
+     "start_time": "2025-04-23T18:50:14.630430Z"
+    },
+    "id": "m-ykWoJoSSuc"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[('45,000-square', 0.4922032654285431),\n",
+      " ('15,000-square', 0.4649604558944702),\n",
+      " ('10,000-square', 0.4544755816459656),\n",
+      " ('6,000-square', 0.44975775480270386),\n",
+      " ('3,500-square', 0.444133460521698),\n",
+      " ('700-square', 0.44257497787475586),\n",
+      " ('50,000-square', 0.4356396794319153),\n",
+      " ('3,000-square', 0.43486514687538147),\n",
+      " ('30,000-square', 0.4330596923828125),\n",
+      " ('footed', 0.43236875534057617)]\n"
+     ]
+    }
+   ],
+   "source": [
+    "pprint.pprint(wv_from_bin.most_similar(positive=['foot', 'glove'], negative=['hand']))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "zn4ruS8MSSud"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "A potential reason for this unexpected result that a 'foot' is a polysemous that often associated with a measurement of area (square feet).\n",
+    "\n",
+    "The model has thus found words that describe areas instead of the expected association of \"foot\".\n",
+    "\n",
+    "This could be due to the fact that the word \"foot\" is more often used in contexts related to measurements, and the model has learned to associate it with other words that are commonly used in those contexts.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "D1gHyZt0SSud"
+   },
+   "source": [
+    "b. Find another example of analogy that does *not* hold according to these vectors. In your solution, state the intended analogy in the form x:y :: a:b, and state the **incorrect** value of b according to the word vectors (in the previous example, this would be **'45,000-square'**)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 59,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-26T18:46:28.544985Z",
+     "start_time": "2025-04-26T18:46:28.522379Z"
+    },
+    "id": "D_rlci42XQTw"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[('executing', 0.5822227001190186),\n",
+      " ('kill', 0.5449170470237732),\n",
+      " ('punish', 0.5260741710662842),\n",
+      " ('prosecute', 0.5189200043678284),\n",
+      " ('executed', 0.5103284120559692),\n",
+      " ('murderers', 0.4918780028820038),\n",
+      " ('apprehend', 0.48943185806274414),\n",
+      " ('execution', 0.4846033453941345),\n",
+      " ('imprison', 0.4825865626335144),\n",
+      " ('executes', 0.4757322669029236)]\n"
+     ]
+    }
+   ],
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "\n",
+    "# correct analogy\n",
+    "x, y, a, b = \"start\", \"stop\", \"execute\", \"cancel\"\n",
+    "# incorrect analogy\n",
+    "pprint.pprint(wv_from_bin.most_similar(positive=[a, y], negative=[x]))\n",
+    "\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "c4x0EHjeSSue"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "The expected analogy is \"start : stop :: execute : cancel\", where \"execute\" is meant in the sense of \"to launch\" or \"to carry out\". However, the model instead returns words related to capital punishment, such as \"kill\" and \"punish\".\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "yvlycXN-SSuf"
+   },
+   "source": [
+    "### Question 2.7: Guided Analysis of Bias in Word Vectors [written]\n",
+    "\n",
+    "It's important to be cognizant of the biases (gender, race, sexual orientation etc.) implicit in our word embeddings. Bias can be dangerous because it can reinforce stereotypes through applications that employ these models.\n",
+    "\n",
+    "Run the cell below, to examine (a) which terms are most similar to \"woman\" and \"profession\" and most dissimilar to \"man\", and (b) which terms are most similar to \"man\" and \"profession\" and most dissimilar to \"woman\". Point out the difference between the list of female-associated words and the list of male-associated words, and explain how it is reflecting gender bias."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-23T18:50:15.008985Z",
+     "start_time": "2025-04-23T18:50:14.907818Z"
+    },
+    "id": "XggWA4MhSSuf"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[('reputation', 0.5250176787376404),\n",
+      " ('professions', 0.5178037881851196),\n",
+      " ('skill', 0.49046966433525085),\n",
+      " ('skills', 0.49005505442619324),\n",
+      " ('ethic', 0.4897659420967102),\n",
+      " ('business', 0.4875852167606354),\n",
+      " ('respected', 0.485920250415802),\n",
+      " ('practice', 0.482104629278183),\n",
+      " ('regarded', 0.4778572618961334),\n",
+      " ('life', 0.4760662019252777)]\n",
+      "\n",
+      "[('professions', 0.5957457423210144),\n",
+      " ('practitioner', 0.49884122610092163),\n",
+      " ('teaching', 0.48292139172554016),\n",
+      " ('nursing', 0.48211804032325745),\n",
+      " ('vocation', 0.4788965880870819),\n",
+      " ('teacher', 0.47160351276397705),\n",
+      " ('practicing', 0.46937814354896545),\n",
+      " ('educator', 0.46524327993392944),\n",
+      " ('physicians', 0.4628995358943939),\n",
+      " ('professionals', 0.4601394236087799)]\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Run this cell\n",
+    "# Here `positive` indicates the list of words to be similar to and `negative` indicates the list of words to be\n",
+    "# most dissimilar from.\n",
+    "\n",
+    "pprint.pprint(wv_from_bin.most_similar(positive=['man', 'profession'], negative=['woman']))\n",
+    "print()\n",
+    "pprint.pprint(wv_from_bin.most_similar(positive=['woman', 'profession'], negative=['man']))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "x4g6KbsYSSuh"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "The difference between the two lists reveals a gender bias in how these word vectors represent the relationship between gender and professions. The women vector tends to contain more \"soft\" and specific words like: vocation and teaching, while the men vector contains more powerful and abstract words like: reputation, ethic, business.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "LxJmnS6lSSui"
+   },
+   "source": [
+    "### Question 2.8: Independent Analysis of Bias in Word Vectors [code + written]  \n",
+    "\n",
+    "Use the `most_similar` function to find another pair of analogies that demonstrates some bias is exhibited by the vectors. Please briefly explain the example of bias that you discover."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 32,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2025-04-23T19:35:04.829909Z",
+     "start_time": "2025-04-23T19:35:04.760478Z"
+    },
+    "id": "PZoDheIfSSui"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[('curricula', 0.4969291388988495),\n",
+      " ('vocational', 0.46789541840553284),\n",
+      " ('k-12', 0.4626578390598297),\n",
+      " ('curriculum', 0.46132174134254456),\n",
+      " ('undergraduate', 0.4520275294780731),\n",
+      " ('preschool', 0.4378831684589386),\n",
+      " ('kindergarten', 0.43563735485076904),\n",
+      " ('enrolled', 0.4347994923591614),\n",
+      " ('mathematics', 0.43187853693962097),\n",
+      " ('grades', 0.43162301182746887)]\n",
+      "\n",
+      "[('health', 0.6209558844566345),\n",
+      " ('educational', 0.6045006513595581),\n",
+      " ('development', 0.5866490602493286),\n",
+      " ('public', 0.5732628703117371),\n",
+      " ('africa', 0.5662320852279663),\n",
+      " ('schools', 0.552230954170227),\n",
+      " ('aids', 0.5356840491294861),\n",
+      " ('care', 0.5352919101715088),\n",
+      " ('social', 0.5316444039344788),\n",
+      " ('government', 0.5303979516029358)]\n"
+     ]
+    }
+   ],
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "\n",
+    "A = \"caucasian\"\n",
+    "B = \"african\"\n",
+    "word = \"education\"\n",
+    "pprint.pprint(wv_from_bin.most_similar(positive=[A, word], negative=[B]))\n",
+    "print()\n",
+    "pprint.pprint(wv_from_bin.most_similar(positive=[B, word], negative=[A]))\n",
+    "\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "TGOlmtJoSSuj"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "The model associates \"Caucasian + education\" with formal, academic concepts, and \"African + education\" with development, aid, and public health — reinforcing existing stereotypes about educational access and systems based on race.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "eK2XVWzmSSuk"
+   },
+   "source": [
+    "### Question 2.9: Thinking About Bias [written] \n",
+    "\n",
+    "a. Give one explanation of how bias gets into the word vectors. Briefly describe a real-world example that demonstrates this source of bias."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "19pM85fCSSuk"
+   },
+   "source": [
+    "### SOLUTION BEGIN\n",
+    "Bias gets into the word vectors primarily through the data they are trained on. If the data contains societal biases, those biases can be reflected in the word vectors. For example, if the training data frequently associates certain professions with one gender, the word vectors will pick up on these associations. The data might contain a higher frequency of phrases like \"female nurse\" and \"male doctor,\" reflecting the historical gender roles in these professions. As a result, the trained word vectors might place \"nurse\" closer to \"woman\" and \"doctor\" closer to \"man\" in the embedding space, perpetuating and even amplifying this gender bias.\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "ILYqJZ7ASSul"
+   },
+   "source": [
+    "b. What is one method you can use to mitigate bias exhibited by word vectors?  Briefly describe a real-world example that demonstrates this method."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "dnJaAB7mSSul"
+   },
+   "source": [
+    "\n",
+    "### SOLUTION BEGIN\n",
+    "One method to mitigate this bias is to preprocess the data and modify biased occurrences or by augmenting the dataset with additional examples that counterbalance the bias.\n",
+    "One more method is to use debiasing algorithms that adjust the word vectors after training to reduce the bias.\n",
+    "A real world example of this is the \"Word Embedding Association Test\" (WEAT), which evaluates the bias in word embeddings by measuring the association between target words (e.g., professions) and attribute words (e.g., gendered terms). By using this test, researchers can identify biased associations in word vectors and then apply debiasing techniques to reduce these biases.\n",
+    "\n",
+    "\n",
+    "### SOLUTION END"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "id": "dzh3eEmZSSum"
+   },
+   "source": [
+    "# <font color=\"red\"> Submission Instructions</font>\n",
+    "\n",
+    "1. Click the Save button at the top of the Jupyter Notebook.\n",
+    "2. Select Cell -> All Output -> Clear. This will clear all the outputs from all cells (but will keep the content of all cells). \n",
+    "2. Select Cell -> Run All. This will run all the cells in order, and will take several minutes.\n",
+    "3. Once you've rerun everything, select File -> Download as -> PDF via LaTeX (If you have trouble using \"PDF via LaTex\", you can also save the webpage as pdf. <font color='blue'> Make sure all your solutions especially the coding parts are displayed in the pdf</font>, it's okay if the provided codes get cut off because lines are not wrapped in code cells).\n",
+    "4. Look at the PDF file and make sure all your solutions are there, displayed correctly. The PDF is the only thing your graders will see!\n",
+    "5. Submit your PDF on **MAMA** system."
+   ]
+  }
+ ],
+ "metadata": {
+  "anaconda-cloud": {},
+  "colab": {
+   "provenance": []
+  },
+  "kernelspec": {
+   "display_name": "mta_nlp_1",
+   "language": "python",
+   "name": "mta_nlp_1"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.9"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
